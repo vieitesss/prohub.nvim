@@ -21,17 +21,19 @@ Tree.__index = Tree
 ---@type string[]
 local containers = {}
 
--- The whole environment git runs in. Nothing else is inherited, so a variable
--- such as GIT_DIR, set when the specs run from a git hook, cannot point git at
--- another project, and the user's git configuration cannot leak in.
+-- The whole environment git runs in, applied with `env -i`. Nothing else is
+-- inherited, so a variable such as GIT_DIR, set when the specs run from a git
+-- hook, cannot point git at another project, and the user's git configuration
+-- cannot leak in. `vim.system` with `clear_env` is not used: Neovim 0.10.0
+-- ignores the environment it is given in that mode.
 local env = {
-    PATH = vim.env.PATH,
-    GIT_CONFIG_GLOBAL = '/dev/null',
-    GIT_CONFIG_SYSTEM = '/dev/null',
-    GIT_AUTHOR_NAME = 'prohub',
-    GIT_AUTHOR_EMAIL = 'prohub@example.com',
-    GIT_COMMITTER_NAME = 'prohub',
-    GIT_COMMITTER_EMAIL = 'prohub@example.com',
+    'PATH=' .. vim.env.PATH,
+    'GIT_CONFIG_GLOBAL=/dev/null',
+    'GIT_CONFIG_SYSTEM=/dev/null',
+    'GIT_AUTHOR_NAME=prohub',
+    'GIT_AUTHOR_EMAIL=prohub@example.com',
+    'GIT_COMMITTER_NAME=prohub',
+    'GIT_COMMITTER_EMAIL=prohub@example.com',
 }
 
 ---Run git in `dir` and return its output without the trailing newline. Raises
@@ -40,13 +42,13 @@ local env = {
 ---@param args string[]
 ---@return string
 local function run(dir, args)
-    local cmd = vim.list_extend({ 'git', '-C', dir }, args)
-    local result = vim.system(cmd, { text = true, clear_env = true, env = env })
-        :wait()
+    local git = vim.list_extend({ 'git', '-C', dir }, args)
+    local cmd = vim.list_extend(vim.list_extend({ 'env', '-i' }, env), git)
+    local result = vim.system(cmd, { text = true }):wait()
     if result.code ~= 0 then
         error(
             ('%s failed: %s'):format(
-                table.concat(cmd, ' '),
+                table.concat(git, ' '),
                 result.stderr or ''
             ),
             3
