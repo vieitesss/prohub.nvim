@@ -1,0 +1,5 @@
+# Each review lives in its own tabpage, owned by prohub
+
+prohub creates a tabpage for every review, sets its working directory to the worktree with `:tcd`, and reuses that tab if a review of the same worktree is already open. When the review closes, prohub goes back to the tab the review was opened from, or to the hub tab if that tab no longer exists. Diff viewers do not create tabs: they render into the current tab.
+
+We chose this over a single review window that switches between worktrees because reviewing several worktrees at the same time is a requirement: a user must be able to keep one review open per worktree and move between them. The consequence is that a diff viewer must support one instance per tabpage and must take the repository root explicitly instead of reading the editor's working directory. minifugit, the default viewer, did not support this when the decision was made, so it needs per-tabpage windows (minifugit issue #69), a programmatic `open({ cwd })` entrypoint (#70) and a read-only base mode (#71).
