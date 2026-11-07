@@ -1,8 +1,19 @@
 local M = {}
 
+local config = require('prohub.config')
 local validate = require('prohub.validate')
 
 ---@alias prohub.Scope 'branch'|'unpushed'|'uncommitted'
+
+---Change the options of prohub. It is optional: `vim.g.prohub` works on its
+---own, and options set after the plugin loads are honoured. A value that is
+---not valid returns an error and leaves the options as they were.
+---@param opts? prohub.ConfigOverrides
+---@return true|nil ok
+---@return string? err
+function M.setup(opts)
+    return config.setup(opts)
+end
 
 ---@class prohub.OpenOpts
 ---@field cwd? string Directory to open the hub from. Defaults to the current one.
