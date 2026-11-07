@@ -16,7 +16,7 @@ These standards apply to all project changes.
 - Use LuaLS annotations for non-trivial modules and APIs: `---@class`, `---@field`, `---@alias`, `---@param`, and `---@return`.
 - Default to `local` functions and locals; only export what is part of a module API.
 - Prefer early returns and explicit `nil` handling over deeply nested conditionals.
-- Validate option tables and constructor inputs with `vim.validate`.
+- Validate option tables and constructor inputs with `vim.validate` in its table form, `vim.validate({ name = { value, 'type', optional } })`, because Neovim 0.10 supports no other. Public functions catch the error and return `nil, err`.
 
 ## Neovim API usage
 
