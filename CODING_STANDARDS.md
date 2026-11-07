@@ -29,7 +29,7 @@ These standards apply to all project changes.
 
 ## Public API
 
-- Public functions that can fail for expected reasons return `true` or `nil, err`. They never throw for those reasons.
+- Public functions that can fail for expected reasons return `true` or `nil, err`. They never throw for those reasons. Test helpers under `tests/helpers/` are not plugin API: they raise on failure, so that a broken fixture fails the spec.
 - Use logging through `prohub.log` for plugin-internal diagnostics. Use `vim.notify` only for failures the user can act on, and put everything else in the log or in `:checkhealth prohub`.
 
 ## Good practices
