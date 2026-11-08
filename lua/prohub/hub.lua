@@ -30,10 +30,15 @@
 ---    local hub = require('prohub.hub')
 ---
 ---    local ok, err = hub.open({ cwd = path })
+---
+---The keys of a hub are buffer-local mappings from the options, and they live
+---in `prohub.hub.keymaps`: the hub hands that module the worktree of the row
+---under the cursor, a refresh and a close.
 ---@class prohub.hub
 local M = {}
 
 local config = require('prohub.config')
+local keymaps = require('prohub.hub.keymaps')
 local log = require('prohub.log')
 local paths = require('prohub.path')
 local status = require('prohub.status')
@@ -114,6 +119,10 @@ local namespace = vim.api.nvim_create_namespace('prohub_hub')
 ---@field buffer integer The buffer that holds the rows.
 ---@field tabpage integer The tabpage the hub lives in.
 ---@field paths table<integer, string> The worktree of each line of the buffer.
+---@field missing? table<string, true> The worktrees git reports as missing.
+---@field worktrees? prohub.Worktree[] The worktrees the last render listed.
+---@field dir? string The directory the hub was opened from.
+---@field mapped? boolean Whether the keys of the hub are on its buffer.
 
 ---The open hubs, by key.
 ---@type table<string, prohub.hub.Hub>
@@ -328,9 +337,10 @@ end
 ---@return string[] lines
 ---@return prohub.hub.Highlight[] highlights
 ---@return table<integer, string> paths
+---@return table<string, true> absent
 local function build(worktrees, collections)
     if #worktrees == 0 then
-        return {}, {}, {}
+        return {}, {}, {}, {}
     end
 
     local header = header_cells()
@@ -344,15 +354,17 @@ local function build(worktrees, collections)
     local lines = { line_of(header, widths) }
     local highlights = {}
     local paths = {}
+    local absent = {}
     for index, record in ipairs(worktrees) do
         local line = index + 1
         lines[line] = line_of(rows[index], widths)
         paths[line] = record.path
         if record.missing then
+            absent[record.path] = true
             table.insert(highlights, { line = line, group = missing })
         end
     end
-    return lines, highlights, paths
+    return lines, highlights, paths, absent
 end
 
 ---Define the highlight groups of the hub, unless the user already set them.
@@ -364,12 +376,24 @@ local function define_highlights()
     vim.api.nvim_set_hl(0, missing, { link = 'Comment', default = true })
 end
 
----Make the buffer of a hub without showing it.
+---The buffer of a hub: the one that already carries its name, so a hub that
+---was closed and opened again finds its buffer back, or a new one. Neither is
+---shown.
 ---@param key string
 ---@return integer
 local function new_buffer(key)
+    local name = prefix .. key
+    for _, buffer in ipairs(vim.api.nvim_list_bufs()) do
+        if
+            vim.api.nvim_buf_is_valid(buffer)
+            and vim.api.nvim_buf_get_name(buffer) == name
+        then
+            return buffer
+        end
+    end
+
     local buffer = vim.api.nvim_create_buf(false, true)
-    local named, err = pcall(vim.api.nvim_buf_set_name, buffer, prefix .. key)
+    local named, err = pcall(vim.api.nvim_buf_set_name, buffer, name)
     if not named then
         log.warn('the hub buffer could not be named: %s', tostring(err))
     end
@@ -413,6 +437,105 @@ local function new_tab(buffer, key)
     return tabpage
 end
 
+---The worktree of the line the cursor of a hub is on, when it still is one,
+---and whether git reports that worktree as missing.
+---@param hub prohub.hub.Hub
+---@return string? path
+---@return boolean missing
+local function cursor_row(hub)
+    if not vim.api.nvim_buf_is_valid(hub.buffer) then
+        return nil, false
+    end
+    if not hub.tabpage or not vim.api.nvim_tabpage_is_valid(hub.tabpage) then
+        return nil, false
+    end
+
+    local win = vim.api.nvim_tabpage_get_win(hub.tabpage)
+    if vim.api.nvim_win_get_buf(win) ~= hub.buffer then
+        return nil, false
+    end
+
+    local path = hub.paths[vim.api.nvim_win_get_cursor(win)[1]]
+    if not path then
+        return nil, false
+    end
+    return path, hub.missing ~= nil and hub.missing[path] == true
+end
+
+---Collect the status of every worktree of a hub again and render the hub, so
+---the rows show what the worktrees hold now. The hub is rendered again through
+---the same path an open takes, so a worktree added since the last render shows
+---up too.
+---@param hub prohub.hub.Hub
+---@return true|nil ok
+---@return string? err
+local function refresh(hub)
+    if not hub.dir then
+        return nil, 'prohub: the hub has no directory to render again'
+    end
+
+    for _, record in ipairs(hub.worktrees or {}) do
+        status.invalidate(record.path)
+    end
+    return M.open({ cwd = hub.dir })
+end
+
+---Close the hub: the tabpage it occupies when it is not the last one, else an
+---empty buffer in that tabpage, which only hides the hub buffer. The hub is
+---forgotten either way, so opening it again makes it new.
+---@param hub prohub.hub.Hub
+---@return true|nil ok
+---@return string? err
+local function close(hub)
+    hubs[hub.key] = nil
+
+    local tabpage = hub.tabpage
+    hub.tabpage = nil
+    if not tabpage or not vim.api.nvim_tabpage_is_valid(tabpage) then
+        return true
+    end
+
+    local closed, err = pcall(function()
+        vim.api.nvim_set_current_tabpage(tabpage)
+        if #vim.api.nvim_list_tabpages() > 1 then
+            vim.cmd('tabclose')
+            return
+        end
+        vim.cmd('enew')
+        vim.t[tabpage][hub_variable] = nil
+    end)
+    if not closed then
+        return nil,
+            ('prohub: the hub could not be closed: %s'):format(tostring(err))
+    end
+    return true
+end
+
+---Map the keys of a hub onto its buffer, once per buffer.
+---@param hub prohub.hub.Hub
+local function attach(hub)
+    if hub.mapped then
+        return
+    end
+
+    local ok, err = keymaps.attach(hub.buffer, {
+        cursor = function()
+            return cursor_row(hub)
+        end,
+        refresh = function()
+            return refresh(hub)
+        end,
+        close = function()
+            return close(hub)
+        end,
+    })
+    if not ok then
+        log.error('the keys of the hub could not be mapped: %s', tostring(err))
+        return
+    end
+    hub.mapped = true
+end
+
 ---The hub of `key`, with its tabpage current. A tabpage the user closed and a
 ---buffer the user wiped are made again, so a hub never finds one of them gone.
 ---@param key string
@@ -425,7 +548,10 @@ local function show(key)
     elseif not vim.api.nvim_buf_is_valid(hub.buffer) then
         hub.buffer = new_buffer(key)
         hub.paths = {}
+        hub.mapped = false
     end
+
+    attach(hub)
 
     if hub.tabpage and vim.api.nvim_tabpage_is_valid(hub.tabpage) then
         vim.api.nvim_set_current_tabpage(hub.tabpage)
@@ -433,24 +559,6 @@ local function show(key)
         hub.tabpage = new_tab(hub.buffer, key)
     end
     return hub
-end
-
----The worktree of the line the cursor of a hub is on, when it still is one.
----@param hub prohub.hub.Hub
----@return string?
-local function cursor_path(hub)
-    if not vim.api.nvim_buf_is_valid(hub.buffer) then
-        return nil
-    end
-    if not hub.tabpage or not vim.api.nvim_tabpage_is_valid(hub.tabpage) then
-        return nil
-    end
-
-    local win = vim.api.nvim_tabpage_get_win(hub.tabpage)
-    if vim.api.nvim_win_get_buf(win) ~= hub.buffer then
-        return nil
-    end
-    return hub.paths[vim.api.nvim_win_get_cursor(win)[1]]
 end
 
 ---The first line that holds a row.
@@ -512,15 +620,19 @@ end
 ---Render the rows of a hub, creating or reusing its tabpage, and keep the
 ---cursor on the worktree it was on.
 ---@param key string
+---@param dir string Directory the hub was opened from.
 ---@param worktrees prohub.Worktree[]
 ---@param collections table<string, prohub.hub.Collection>
-local function render(key, worktrees, collections)
-    local lines, highlights, listed = build(worktrees, collections)
-    local previous = hubs[key] and cursor_path(hubs[key]) or nil
+local function render(key, dir, worktrees, collections)
+    local lines, highlights, listed, absent = build(worktrees, collections)
+    local previous = hubs[key] and cursor_row(hubs[key]) or nil
 
     local hub = show(key)
     define_highlights()
+    hub.dir = dir
+    hub.worktrees = worktrees
     hub.paths = listed
+    hub.missing = absent
     write(hub.buffer, lines, highlights)
     restore_cursor(hub, previous)
 end
@@ -529,8 +641,9 @@ end
 ---time, and render the hub once every collection has answered. A collection
 ---that fails renders its own row with the error and does not fail the hub.
 ---@param key string
+---@param dir string Directory the hub was opened from.
 ---@param worktrees prohub.Worktree[]
-local function collect(key, worktrees)
+local function collect(key, dir, worktrees)
     local collections = {}
     local remaining = 0
     for _, entry in ipairs(worktrees) do
@@ -546,7 +659,7 @@ local function collect(key, worktrees)
             return
         end
         rendered = true
-        render(key, worktrees, collections)
+        render(key, dir, worktrees, collections)
     end
 
     local function record(path, result, message)
@@ -626,7 +739,7 @@ local function shown(dir, worksets, worktrees, err)
         return
     end
 
-    collect(identity(dir, worktrees, worksets), worktrees)
+    collect(identity(dir, worktrees, worksets), dir, worktrees)
 end
 
 ---@param opts? prohub.OpenOpts
