@@ -7,8 +7,10 @@ A Neovim plugin that shows the worktrees of a git project in one buffer, the hub
 ## Requirements
 
 - Neovim 0.10 or newer.
-- `git` with support for `git worktree list --porcelain`.
-- A diff viewer. The default one is [minifugit.nvim](https://github.com/vieitesss/minifugit.nvim).
+- `git` 2.36 or newer, for `git worktree list --porcelain -z`.
+- A diff viewer. The default one is [minifugit.nvim](https://github.com/vieitesss/minifugit.nvim), which needs Neovim 0.11 or newer.
+
+Run `:checkhealth prohub` to check each requirement.
 
 ## Trying it from a worktree
 
