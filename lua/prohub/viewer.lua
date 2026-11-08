@@ -55,6 +55,33 @@ local builtins = {
 local names = vim.tbl_keys(builtins)
 table.sort(names)
 
+---Load the module of a built-in viewer by name. An unknown name lists the
+---known viewers, and a module that does not load reports the reason, so a
+---configuration that names nothing usable still says why.
+---@param name string
+---@return any? loaded
+---@return string? err
+local function builtin(name)
+    local module = builtins[name]
+    if not module then
+        return nil,
+            ('prohub: unknown diff viewer: %s (known viewers: %s)'):format(
+                name,
+                table.concat(names, ', ')
+            )
+    end
+
+    local ok, loaded = pcall(require, module)
+    if not ok then
+        return nil,
+            ('prohub: could not load the %s diff viewer: %s'):format(
+                name,
+                tostring(loaded)
+            )
+    end
+    return loaded
+end
+
 ---Check the arguments of `open`. The context is what a review of one scope
 ---produces, so a scope that needs a revision has one, and the uncommitted
 ---scope has none.
@@ -110,22 +137,9 @@ end
 ---@return string? err
 function M.resolve(spec)
     if type(spec) == 'string' then
-        local module = builtins[spec]
-        if not module then
-            return nil,
-                ('prohub: unknown diff viewer: %s (known viewers: %s)'):format(
-                    spec,
-                    table.concat(names, ', ')
-                )
-        end
-
-        local ok, loaded = pcall(require, module)
-        if not ok then
-            return nil,
-                ('prohub: could not load the %s diff viewer: %s'):format(
-                    spec,
-                    tostring(loaded)
-                )
+        local loaded, err = builtin(spec)
+        if not loaded then
+            return nil, err
         end
         return M.resolve(loaded)
     end
@@ -149,6 +163,52 @@ function M.resolve(spec)
             'prohub: the diff viewer must be a name, a function or a table '
             .. 'with an open function, got %s'
         ):format(type(spec))
+end
+
+---Check that a viewer can do what prohub needs. The viewer resolves the way
+---`open` resolves it, so an unknown name, a module that does not load and a
+---table without `open` are errors here too. A built-in viewer is then asked to
+---check itself, which keeps what a plugin needs inside the adapter of that
+---plugin; an adapter without a check is accepted once it resolves. This
+---function never throws.
+---@param spec any The `diff_viewer` option.
+---@return true|nil ok
+---@return string? err
+---@return string? advice What the user can do about a failure, when the
+---built-in viewer names one.
+function M.check(spec)
+    local resolved, err = M.resolve(spec)
+    if not resolved then
+        return nil, err
+    end
+    if type(spec) ~= 'string' then
+        return true
+    end
+
+    local loaded, load_err = builtin(spec)
+    if not loaded then
+        return nil, load_err
+    end
+    if type(loaded) ~= 'table' or type(loaded.check) ~= 'function' then
+        return true
+    end
+
+    local called, ok, check_err, advice = pcall(loaded.check)
+    if not called then
+        return nil,
+            ('prohub: the %s diff viewer check failed: %s'):format(
+                spec,
+                tostring(ok)
+            )
+    end
+    if ok ~= true then
+        return nil,
+            check_err or ('prohub: the %s diff viewer is not available'):format(
+                spec
+            ),
+            advice
+    end
+    return true
 end
 
 ---Check the value a viewer returned. A viewer reports success with `true` and

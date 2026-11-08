@@ -1,7 +1,7 @@
 local git = require('helpers.git')
 
 describe('prohub.viewers.minifugit', function()
-    local adapter, project, previous
+    local adapter, project, previous, version
 
     ---Replace minifugit with a stub, as a machine without it, or with another
     ---version of it, would be seen by the adapter.
@@ -10,16 +10,31 @@ describe('prohub.viewers.minifugit', function()
         package.loaded['minifugit'] = stub
     end
 
+    ---Make the editor report a version, so a case covers minifugit's floor on
+    ---every Neovim the suite runs on.
+    ---@param text string
+    local function pretend(text)
+        local real = version
+        vim.version = setmetatable({}, {
+            __call = function()
+                return real.parse(text)
+            end,
+            __index = real,
+        })
+    end
+
     before_each(function()
         package.loaded['prohub.viewer'] = nil
         package.loaded['prohub.viewers.minifugit'] = nil
         adapter = require('prohub.viewers.minifugit')
         previous = package.loaded['minifugit']
+        version = vim.version
         project = git.project()
     end)
 
     after_each(function()
         package.loaded['minifugit'] = previous
+        vim.version = version
         git.cleanup()
     end)
 
@@ -139,5 +154,49 @@ describe('prohub.viewers.minifugit', function()
 
         assert.equals(project.path, received.cwd)
         assert.is_false(received.open_in_tab)
+    end)
+
+    describe('check', function()
+        it('is OK on a development build of Neovim 0.11', function()
+            pretend('0.11.0-dev+g1234')
+            install({
+                open = function()
+                    return true
+                end,
+            })
+
+            assert.is_true(adapter.check())
+        end)
+
+        it('returns an error and advice when minifugit is absent', function()
+            pretend('0.13.0')
+            install(nil)
+
+            local ok, err, advice = adapter.check()
+
+            assert.is_nil(ok)
+            assert.equals(
+                'prohub: the minifugit diff viewer is not installed',
+                err
+            )
+            assert.is_string(advice)
+        end)
+
+        it('returns an error and advice when Neovim is below 0.11', function()
+            pretend('0.10.0')
+            install({
+                open = function()
+                    return true
+                end,
+            })
+
+            local ok, err, advice = adapter.check()
+
+            assert.is_nil(ok)
+            assert.is_truthy(err:find('0.11', 1, true))
+            assert.is_truthy(err:find('0.10.0', 1, true))
+            assert.is_truthy(advice:find('Upgrade Neovim', 1, true))
+            assert.is_truthy(advice:find('diff_viewer', 1, true))
+        end)
     end)
 end)

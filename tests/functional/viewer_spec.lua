@@ -1,7 +1,7 @@
 local git = require('helpers.git')
 
 describe('prohub.viewer', function()
-    local config, viewer, project
+    local config, viewer, project, adapter
 
     -- The modules under test keep no state, but the options of `setup` live in
     -- the configuration module, so every case starts from modules that were
@@ -15,11 +15,13 @@ describe('prohub.viewer', function()
     end
 
     before_each(function()
+        adapter = package.loaded['prohub.viewers.minifugit']
         reload()
         project = git.project()
     end)
 
     after_each(function()
+        package.loaded['prohub.viewers.minifugit'] = adapter
         vim.g.prohub = nil
         git.cleanup()
     end)
@@ -227,5 +229,78 @@ describe('prohub.viewer', function()
 
         assert.is_nil(ok)
         assert.is_string(err)
+    end)
+
+    describe('check', function()
+        it('accepts a viewer function and a table viewer', function()
+            assert.is_true(viewer.check(function()
+                return true
+            end))
+            assert.is_true(viewer.check({
+                open = function()
+                    return true
+                end,
+            }))
+        end)
+
+        it('returns the error of a name it does not know', function()
+            local ok, err = viewer.check('nosuchviewer')
+
+            assert.is_nil(ok)
+            assert.is_string(err)
+            assert.is_truthy(err:find('nosuchviewer', 1, true))
+        end)
+
+        it('accepts a built-in viewer without a check of its own', function()
+            package.loaded['prohub.viewers.minifugit'] = {
+                open = function()
+                    return true
+                end,
+            }
+
+            assert.is_true(viewer.check('minifugit'))
+        end)
+
+        it('passes on what a built-in viewer reports', function()
+            package.loaded['prohub.viewers.minifugit'] = {
+                open = function()
+                    return true
+                end,
+                check = function()
+                    return nil, 'prohub: the viewer is broken', 'Fix it.'
+                end,
+            }
+
+            local ok, err, advice = viewer.check('minifugit')
+
+            assert.is_nil(ok)
+            assert.are.equal('prohub: the viewer is broken', err)
+            assert.are.equal('Fix it.', advice)
+        end)
+
+        it('turns a built-in check that throws into an error', function()
+            package.loaded['prohub.viewers.minifugit'] = {
+                open = function()
+                    return true
+                end,
+                check = function()
+                    error('the check exploded')
+                end,
+            }
+
+            local ok, err = viewer.check('minifugit')
+
+            assert.is_nil(ok)
+            assert.is_string(err)
+            assert.is_truthy(err:find('the check exploded', 1, true))
+        end)
+
+        it('returns no advice when the failure has none', function()
+            local ok, err, advice = viewer.check('nosuchviewer')
+
+            assert.is_nil(ok)
+            assert.is_string(err)
+            assert.is_nil(advice)
+        end)
     end)
 end)
