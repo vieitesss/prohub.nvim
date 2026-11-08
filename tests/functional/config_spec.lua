@@ -122,6 +122,34 @@ describe('prohub.config', function()
         assert.equals('s', options.keymaps.scope)
     end)
 
+    it('accepts a diff viewer as a function or as a table with open', function()
+        local fake = function()
+            return true
+        end
+
+        assert.is_true(config.setup({ diff_viewer = fake }))
+        assert.are.equal(fake, config.get().diff_viewer)
+
+        local table_viewer = { open = fake }
+        assert.is_true(config.setup({ diff_viewer = table_viewer }))
+
+        -- The options are copied, so the table is a copy and its functions are
+        -- the ones that were given.
+        local stored = config.get().diff_viewer
+        assert.is_table(stored)
+        assert.are.equal(fake, stored.open)
+    end)
+
+    it('rejects a diff viewer it could not call', function()
+        for _, value in ipairs({ 3, true, {}, { open = 'yes' } }) do
+            local ok, err = config.setup({ diff_viewer = value })
+
+            assert.is_nil(ok)
+            assert.is_string(err)
+            assert.is_truthy(err:find('diff_viewer', 1, true))
+        end
+    end)
+
     it('rejects an invalid option and keeps the options it had', function()
         assert.is_true(config.setup({ refresh_interval = 1000 }))
 

@@ -28,7 +28,7 @@ local validate = require('prohub.validate')
 ---@class prohub.Config
 ---@field default_scope prohub.Scope The scope of a review that is given none.
 ---@field default_branch string? The branch of a project whose base is unknown.
----@field diff_viewer string Name of the diff viewer that draws a review.
+---@field diff_viewer prohub.ViewerSpec The viewer that draws a review.
 ---@field refresh_interval integer Milliseconds between two refreshes of the hub.
 ---@field worksets table<string, string[]|fun(): string[]> Worktrees shown per directory.
 ---@field keymaps prohub.Keymaps
@@ -38,7 +38,7 @@ local validate = require('prohub.validate')
 ---@class prohub.ConfigOverrides
 ---@field default_scope? prohub.Scope
 ---@field default_branch? string
----@field diff_viewer? string
+---@field diff_viewer? prohub.ViewerSpec
 ---@field refresh_interval? integer
 ---@field worksets? table<string, string[]|fun(): string[]>
 ---@field keymaps? table<string, string|false>
@@ -120,6 +120,19 @@ local function is_workset(value)
     return type(value) == 'function' or validate.is_string_list(value)
 end
 
+---The `diff_viewer` option is the name of a built-in viewer, a viewer
+---function, or a table with an `open` function. A name that names no viewer is
+---caught when a review opens, not here, so a configuration file stays valid
+---when a viewer is not installed.
+---@param value any
+---@return boolean
+local function is_diff_viewer(value)
+    if is_non_empty_string(value) or type(value) == 'function' then
+        return true
+    end
+    return type(value) == 'table' and type(value.open) == 'function'
+end
+
 ---Check the merged options. Every message names the option, so a mistake in
 ---`vim.g.prohub` or in `setup` is easy to find.
 ---@param options table
@@ -141,8 +154,8 @@ local function check_options(options)
         },
         diff_viewer = {
             options.diff_viewer,
-            is_non_empty_string,
-            'a non-empty string',
+            is_diff_viewer,
+            'a name, a function or a table with an open function',
         },
         refresh_interval = {
             options.refresh_interval,
