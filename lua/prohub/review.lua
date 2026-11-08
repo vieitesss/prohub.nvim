@@ -10,10 +10,8 @@
 ---
 ---When a review closes, the editor returns to the tabpage it was opened from,
 ---or to the hub tabpage when that one is gone. This module does not build the
----hub: it finds it through a tab variable that the hub sets on its own
----tabpage.
----
----    vim.t[tabpage].prohub_hub = true
+---hub: it finds it through `prohub.tab`, which owns the tabpages prohub marks
+---and the rule that closes them.
 ---
 ---    local review = require('prohub.review')
 ---
@@ -25,18 +23,13 @@ local config = require('prohub.config')
 local log = require('prohub.log')
 local paths = require('prohub.path')
 local scope = require('prohub.scope')
+local tab = require('prohub.tab')
 local validate = require('prohub.validate')
 local viewer = require('prohub.viewer')
 
 ---The name of the autocommand group that follows the tabpages of the reviews.
 ---@type string
 local group_name = 'prohub_review'
-
----The tab variable that marks the hub tabpage. It is the whole contract
----between the hub and this module: the hub sets it on its own tabpage, and a
----review that cannot return to the tabpage it was opened from goes there.
----@type string
-local hub_variable = 'prohub_hub'
 
 ---An open review.
 ---@class prohub.review.Review
@@ -53,22 +46,6 @@ local group
 ---The open reviews, by the real path of their worktree.
 ---@type table<string, prohub.review.Review>
 local reviews = {}
-
----The tabpage the hub occupies, or nil when no tabpage carries the variable.
----@return integer?
-local function hub_tabpage()
-    for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
-        if vim.t[tabpage][hub_variable] then
-            return tabpage
-        end
-    end
-end
-
----The number of open tabpages.
----@return integer
-local function tabpage_count()
-    return #vim.api.nvim_list_tabpages()
-end
 
 ---Go to a tabpage when it is still open.
 ---@param tabpage integer?
@@ -88,28 +65,7 @@ local function return_from(review)
     if go_to(review.opened_from) then
         return
     end
-    go_to(hub_tabpage())
-end
-
----Close the tabpage of a review, unless it is the last one, because Neovim
----cannot close the last tabpage of the editor.
----@param tabpage integer
-local function close_tabpage(tabpage)
-    if not vim.api.nvim_tabpage_is_valid(tabpage) then
-        return
-    end
-    if tabpage_count() < 2 then
-        return
-    end
-
-    vim.api.nvim_set_current_tabpage(tabpage)
-    local closed, err = pcall(vim.cmd, 'tabclose')
-    if not closed then
-        log.debug(
-            'the tabpage of the review could not be closed: %s',
-            tostring(err)
-        )
-    end
+    go_to(tab.hub())
 end
 
 ---Give up on a review: forget it, close its tabpage when there is one to close
@@ -117,7 +73,13 @@ end
 ---@param review prohub.review.Review
 local function abandon(review)
     reviews[review.path] = nil
-    close_tabpage(review.tabpage)
+    local _, close_err = tab.close(review.tabpage)
+    if close_err then
+        log.debug(
+            'the tabpage of the review could not be closed: %s',
+            close_err
+        )
+    end
     return_from(review)
 end
 

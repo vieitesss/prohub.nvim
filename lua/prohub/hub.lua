@@ -15,7 +15,9 @@
 ---
 ---The rows of a hub are built by `prohub.hub.render`, which reads the
 ---worktrees and their status and writes nothing, so the render of a hub is the
----one step that touches the buffer.
+---one step that touches the buffer. The hub marks its tabpage through
+---`prohub.tab`, which is how a review that cannot return to the tabpage it was
+---opened from finds the hub.
 ---
 ---    local hub = require('prohub.hub')
 ---
@@ -33,17 +35,13 @@ local log = require('prohub.log')
 local paths = require('prohub.path')
 local render = require('prohub.hub.render')
 local status = require('prohub.status')
+local tab = require('prohub.tab')
 local validate = require('prohub.validate')
 local workset = require('prohub.workset')
 
 ---The prefix of the name of the buffer of a hub.
 ---@type string
 local prefix = 'prohub://'
-
----The tab variable that marks the tabpage of a hub, which is the whole
----contract between the hub and `prohub.review`.
----@type string
-local hub_variable = 'prohub_hub'
 
 ---The namespace of the highlights of the hub buffers.
 local namespace = vim.api.nvim_create_namespace('prohub_hub')
@@ -128,7 +126,7 @@ local function new_tab(buffer, key)
     end
 
     local tabpage = vim.api.nvim_get_current_tabpage()
-    vim.t[tabpage][hub_variable] = true
+    tab.mark_hub(tabpage)
 
     if vim.fn.isdirectory(key) == 1 then
         local changed, err = pcall(vim.cmd, 'tcd ' .. vim.fn.fnameescape(key))
@@ -198,18 +196,27 @@ local function close(hub)
         return true
     end
 
-    local closed, err = pcall(function()
-        vim.api.nvim_set_current_tabpage(tabpage)
-        if #vim.api.nvim_list_tabpages() > 1 then
-            vim.cmd('tabclose')
-            return
-        end
-        vim.cmd('enew')
-        vim.t[tabpage][hub_variable] = nil
-    end)
-    if not closed then
+    local closed, close_err = tab.close(tabpage)
+    if close_err then
         return nil,
-            ('prohub: the hub could not be closed: %s'):format(tostring(err))
+            ('prohub: the hub could not be closed: %s'):format(close_err)
+    end
+    if closed then
+        return true
+    end
+
+    -- Neovim cannot close the last tabpage, so the hub buffer is replaced by
+    -- an empty one and the tabpage stays.
+    local hidden, hide_err = pcall(function()
+        vim.api.nvim_set_current_tabpage(tabpage)
+        vim.cmd('enew')
+        tab.clear_hub(tabpage)
+    end)
+    if not hidden then
+        return nil,
+            ('prohub: the hub could not be closed: %s'):format(
+                tostring(hide_err)
+            )
     end
     return true
 end

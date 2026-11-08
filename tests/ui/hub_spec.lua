@@ -1,7 +1,7 @@
 local git = require('helpers.git')
 
 describe('prohub hub', function()
-    local config, hub, prohub, review
+    local config, hub, prohub, review, tab
     local notified, messages
     local origin_cwd = vim.fn.getcwd()
 
@@ -23,6 +23,7 @@ describe('prohub hub', function()
         config = require('prohub.config')
         hub = require('prohub.hub')
         review = require('prohub.review')
+        tab = require('prohub.tab')
         prohub = require('prohub')
     end
 
@@ -268,7 +269,7 @@ describe('prohub hub', function()
             local hub_tabpage = current()
 
             assert.equals(2, tabs())
-            assert.is_true(vim.t[hub_tabpage].prohub_hub)
+            assert.equals(hub_tabpage, tab.hub())
             assert.equals(project.path, tab_cwd(hub_tabpage))
 
             vim.cmd('tabnew')
@@ -283,7 +284,7 @@ describe('prohub hub', function()
             assert.equals(3, tabs())
             assert.equals(buffer, vim.api.nvim_get_current_buf())
             assert.equals(4, #lines_of(buffer))
-            assert.is_true(vim.t[hub_tabpage].prohub_hub)
+            assert.equals(hub_tabpage, tab.hub())
             assert.equals(project.path, tab_cwd(hub_tabpage))
 
             assert.equals('nofile', vim.bo[buffer].buftype)
@@ -510,7 +511,7 @@ describe('prohub hub', function()
 
         open(project.path, project.path)
         local hub_tabpage = current()
-        assert.is_true(vim.t[hub_tabpage].prohub_hub)
+        assert.equals(hub_tabpage, tab.hub())
 
         local viewer, calls = recording_viewer()
         assert.is_true(config.setup({ diff_viewer = viewer }))

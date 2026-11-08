@@ -1,7 +1,7 @@
 local git = require('helpers.git')
 
 describe('prohub review tab lifecycle', function()
-    local config, prohub, review
+    local config, prohub, review, tab
     local project, feature, fix
     local notified
 
@@ -23,6 +23,7 @@ describe('prohub review tab lifecycle', function()
         vim.g.prohub = nil
         config = require('prohub.config')
         review = require('prohub.review')
+        tab = require('prohub.tab')
         prohub = require('prohub')
     end
 
@@ -240,7 +241,7 @@ describe('prohub review tab lifecycle', function()
 
             vim.cmd('tabnew')
             local hub = current()
-            vim.t[hub].prohub_hub = true
+            tab.mark_hub(hub)
 
             vim.cmd('tabnew')
             local origin = current()
