@@ -424,6 +424,33 @@ describe('prohub hub keymaps', function()
         assert.equals(0, #messages)
     end)
 
+    it(
+        'replaces the keys of a reopened hub with the ones configured now',
+        function()
+            local project = git.project()
+            assert.is_true(config.setup({ keymaps = { close = 'q' } }))
+            local buffer = open(project)
+            press(buffer, 'q')
+            assert.equals(1, tabs())
+
+            assert.is_true(
+                config.setup({ keymaps = { close = 'x', help = false } })
+            )
+            local reopened = open(project)
+            -- The buffer keeps the rows of the first open, so the keys of the
+            -- reopened hub are mapped once its own render lands.
+            wait_for(function()
+                return mapping(reopened, 'x') ~= nil
+            end, 'the reopened hub did not map its keys')
+
+            assert.equals(buffer, reopened)
+            assert.is_nil(mapping(reopened, 'q'))
+            assert.is_nil(mapping(reopened, '?'))
+            assert.is_not_nil(mapping(reopened, 'x'))
+            assert.is_not_nil(mapping(reopened, '<CR>'))
+        end
+    )
+
     it('notifies a review that fails and leaves no tab behind', function()
         local project = git.project()
         project:worktree('feature')

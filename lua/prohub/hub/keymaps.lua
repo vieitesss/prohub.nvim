@@ -5,8 +5,9 @@
 ---The hub owns the rows and the tabpage, so it hands this module a small table
 ---of actions: the worktree of the row under the cursor and whether it is
 ---missing, a refresh and a close. The keys themselves come from
----`prohub.config`, and they are read when the buffer of a hub is made, so a
----key set to `false` gets no mapping at all.
+---`prohub.config`, and they are read each time a hub opens, so a key set to
+---`false` gets no mapping at all and a key changed since the last open replaces
+---the old one.
 ---
 ---Every action runs under a guard: a failure becomes a message the user can
 ---act on and never an error trace.
@@ -173,14 +174,26 @@ local handlers = {
     end,
 }
 
----Map the keys of a buffer from the options of a hub.
+---The buffer variable that holds the keys the last attach mapped, so the next
+---one can remove them. It lives as long as the buffer does.
+local mapped_var = 'prohub_keys'
+
+---Map the keys of a buffer from the options of a hub. A hub buffer outlives
+---its hub, so the keys an earlier hub mapped on it are removed first, and only
+---the keys configured now stay.
 ---@param buffer integer
 ---@param keys prohub.Keymaps
 ---@param actions prohub.hub.KeymapActions
 local function install(buffer, keys, actions)
+    for _, lhs in ipairs(vim.b[buffer][mapped_var] or {}) do
+        pcall(vim.keymap.del, 'n', lhs, { buffer = buffer })
+    end
+
+    local mapped = {}
     for _, name in ipairs(order) do
         local lhs = keys[name]
         if lhs then
+            table.insert(mapped, lhs)
             local handler = handlers[name]
             local description = descriptions[name]
             vim.keymap.set('n', lhs, function()
@@ -194,6 +207,7 @@ local function install(buffer, keys, actions)
             })
         end
     end
+    vim.b[buffer][mapped_var] = mapped
 end
 
 ---Map the keys of a hub onto its buffer, from the options in use. A key set to
