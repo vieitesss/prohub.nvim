@@ -65,17 +65,15 @@ local function is_absolute(path)
     return path:match('^/') ~= nil
 end
 
----Check the arguments and the path, so each mistake gets its own message
----instead of whatever git prints.
----@param path any
----@param args any
+---Check that a path is an absolute directory, the rule every command applies
+---to the worktree it runs in. It is public because a caller that runs no
+---command, such as the scope that shows the uncommitted changes, still answers
+---a path that cannot be a worktree with the same error.
+---@param path string
 ---@return true|nil ok
 ---@return string? err
-local function check_inputs(path, args)
-    local ok, err = validate.check({
-        path = { path, 'string' },
-        args = { args, is_string_list, 'a list of strings' },
-    })
+function M.check_path(path)
+    local ok, err = validate.check({ path = { path, 'string' } })
     if not ok then
         return nil, err
     end
@@ -92,6 +90,23 @@ local function check_inputs(path, args)
         return nil, ('prohub: the path is not a directory: %s'):format(path)
     end
     return true
+end
+
+---Check the arguments and the path, so each mistake gets its own message
+---instead of whatever git prints.
+---@param path any
+---@param args any
+---@return true|nil ok
+---@return string? err
+local function check_inputs(path, args)
+    local ok, err = validate.check({
+        args = { args, is_string_list, 'a list of strings' },
+    })
+    if not ok then
+        return nil, err
+    end
+
+    return M.check_path(path)
 end
 
 ---Build the git command without changing the caller's arguments.

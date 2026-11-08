@@ -242,6 +242,31 @@ describe('prohub.git', function()
         end)
     end
 
+    describe('check_path', function()
+        it('accepts an absolute directory', function()
+            local project = git.project()
+
+            assert.is_true(prohub_git.check_path(project.path))
+        end)
+
+        it('returns an error for a path that cannot be a worktree', function()
+            local project = git.project()
+            local cases = {
+                { nil, 'path' },
+                { 'relative/dir', 'must be absolute' },
+                { plain .. '/missing', 'does not exist' },
+                { project.path .. '/README.md', 'is not a directory' },
+            }
+
+            for _, case in ipairs(cases) do
+                local ok, err = prohub_git.check_path(case[1])
+
+                assert.is_nil(ok)
+                assert.is_truthy(err:find(case[2], 1, true))
+            end
+        end)
+    end)
+
     describe('run', function()
         it('calls back on the main loop, after it returned', function()
             local project = git.project()
