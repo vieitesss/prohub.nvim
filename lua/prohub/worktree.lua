@@ -4,7 +4,9 @@
 ---cover every layout with a literal string. It expects the NUL terminated form
 ---of the command, `--porcelain -z`, because git then prints every path exactly
 ---as it is instead of quoting the unusual ones. `list` and `list_sync` run the
----command in a worktree and feed its output to `parse`.
+---command in a worktree and feed its output to `parse`, and every asynchronous
+---callback prohub delivers runs later on the main loop, never inline with the
+---call that started the work.
 ---
 ---Bare repositories are not worktrees the hub can show or review, so `parse`
 ---leaves them out. A worktree git reports as prunable is kept, marked as
@@ -17,8 +19,9 @@
 ---@class prohub.worktree
 local M = {}
 
-local git = require('prohub.git')
+local chain = require('prohub.chain')
 local log = require('prohub.log')
+local paths = require('prohub.path')
 local validate = require('prohub.validate')
 
 ---The command whose output `parse` understands.
@@ -100,13 +103,28 @@ function M.parse(text)
     return worktrees
 end
 
+---The steps of a listing: run the command and parse its output.
+---@param path string
+---@return prohub.chain.Flow
+local function flow(path)
+    return function(run, done)
+        run(command, function(out, err)
+            if not out then
+                log.debug('could not list the worktrees of %s: %s', path, err)
+                return done(nil, err)
+            end
+            done(M.parse(out))
+        end)
+    end
+end
+
 ---List the worktrees of a project without blocking the editor, in the order
 ---git reports them, which puts the main checkout first unless the project has
 ---a bare layout and its main entry is hidden.
 ---
----Return `nil` and an error for invalid arguments, an invalid path or a git
----command that cannot be started, without calling the callback. Asynchronously,
----the callback receives the worktrees, or `nil` and an error, on the main loop.
+---Return `nil` and an error for invalid arguments or an invalid path, without
+---calling the callback. Otherwise the callback receives the worktrees, or `nil`
+---and an error, later on the main loop.
 ---@param path string Absolute path of any worktree or bare repository of the
 ---project, usually the main checkout.
 ---@param callback fun(worktrees: prohub.Worktree[]?, err: string?)
@@ -118,12 +136,12 @@ function M.list(path, callback)
         return nil, err
     end
 
-    return git.run(path, command, function(out, run_err)
-        if not out then
-            return callback(nil, run_err)
-        end
-        callback(M.parse(out))
-    end)
+    ok, err = paths.check(path)
+    if not ok then
+        return nil, err
+    end
+
+    return chain.run(path, flow(path), callback)
 end
 
 ---List the worktrees of a project and wait for git. Prefer `list` anywhere the
@@ -133,13 +151,12 @@ end
 ---@return prohub.Worktree[]|nil worktrees
 ---@return string? err
 function M.list_sync(path)
-    local out, err = git.run_sync(path, command)
-    if not out then
-        log.debug('could not list the worktrees of %s: %s', path, err)
+    local ok, err = paths.check(path)
+    if not ok then
         return nil, err
     end
 
-    return M.parse(out)
+    return chain.run_sync(path, flow(path))
 end
 
 return M

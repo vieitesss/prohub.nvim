@@ -5,8 +5,8 @@
 ---prohub returns `nil` and an error directly for invalid arguments, an invalid
 ---worktree path or a git command that cannot be started. Neither form throws.
 ---For a command that started, `run` delivers git's untouched standard output,
----or `nil` and an error, through a callback later on the main loop. `run_sync`
----returns the same command outcome directly.
+---or `nil`, an error and the exit status, through a callback later on the main
+---loop. `run_sync` returns the same outcome directly.
 ---
 ---    local git = require('prohub.git')
 ---
@@ -23,6 +23,7 @@
 local M = {}
 
 local log = require('prohub.log')
+local paths = require('prohub.path')
 local validate = require('prohub.validate')
 
 ---The variables that point git at a project other than the worktree it is
@@ -44,72 +45,21 @@ local git_environment = {
 ---@type integer
 M.timeout = 10000
 
----@param value any
----@return boolean
-local function is_string_list(value)
-    if not vim.islist(value) then
-        return false
-    end
-    for _, item in ipairs(value) do
-        if type(item) ~= 'string' then
-            return false
-        end
-    end
-    return true
-end
-
----@param path string
----@return boolean
-local function is_absolute(path)
-    if vim.fn.has('win32') == 1 then
-        return path:match('^%a:[/\\]') ~= nil
-            or path:match('^[/\\][/\\]') ~= nil
-    end
-    return path:match('^/') ~= nil
-end
-
----Check that a path is an absolute directory, the rule every command applies
----to the worktree it runs in. It is public because a caller that runs no
----command, such as the scope that shows the uncommitted changes, still answers
----a path that cannot be a worktree with the same error.
----@param path string
----@return true|nil ok
----@return string? err
-function M.check_path(path)
-    local ok, err = validate.check({ path = { path, 'string' } })
-    if not ok then
-        return nil, err
-    end
-
-    if not is_absolute(path) then
-        return nil, ('prohub: the path must be absolute: %s'):format(path)
-    end
-
-    local stat = vim.uv.fs_stat(path)
-    if not stat then
-        return nil, ('prohub: the path does not exist: %s'):format(path)
-    end
-    if stat.type ~= 'directory' then
-        return nil, ('prohub: the path is not a directory: %s'):format(path)
-    end
-    return true
-end
-
 ---Check the arguments and the path, so each mistake gets its own message
 ---instead of whatever git prints.
----@param path any
+---@param worktree any
 ---@param args any
 ---@return true|nil ok
 ---@return string? err
-local function check_inputs(path, args)
+local function check_inputs(worktree, args)
     local ok, err = validate.check({
-        args = { args, is_string_list, 'a list of strings' },
+        args = { args, validate.is_string_list, 'a list of strings' },
     })
     if not ok then
         return nil, err
     end
 
-    return M.check_path(path)
+    return paths.check(worktree)
 end
 
 ---Build the git command without changing the caller's arguments.
@@ -148,10 +98,11 @@ end
 ---@param result vim.SystemCompleted
 ---@return string? out
 ---@return string? err
+---@return integer code The exit status of a command that ran.
 local function interpret(path, command, result)
     if result.code == 0 then
         log.debug('git %s: ok', command)
-        return result.stdout or ''
+        return result.stdout or '', nil, 0
     end
 
     local err
@@ -169,7 +120,7 @@ local function interpret(path, command, result)
         err = ('prohub: git %s failed in %s: %s'):format(command, path, detail)
     end
     log.debug('%s', err)
-    return nil, err
+    return nil, err, result.code
 end
 
 ---Error for a git that could not be started at all, such as a missing binary.
@@ -186,10 +137,11 @@ end
 ---without calling the callback.
 ---
 ---Return `true` when the command starts. The callback receives the output, or
----`nil` and an error, and always runs later on the main loop.
+---`nil`, an error and the exit status of a command that ran, and always runs
+---later on the main loop.
 ---@param path string Absolute path of the worktree.
 ---@param args string[] Arguments of git, after `git -C path`.
----@param callback fun(out: string?, err: string?)
+---@param callback fun(out: string?, err: string?, code: integer?)
 ---@return true|nil ok
 ---@return string? err
 function M.run(path, args, callback)
@@ -224,6 +176,7 @@ end
 ---@param args string[] Arguments of git, after `git -C path`.
 ---@return string? out
 ---@return string? err
+---@return integer? code The exit status of a command that ran.
 function M.run_sync(path, args)
     local valid, err = check_inputs(path, args)
     if not valid then

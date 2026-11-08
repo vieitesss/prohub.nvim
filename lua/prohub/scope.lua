@@ -17,6 +17,10 @@
 ---normal result, not an error: it names the scope that was used and it tells
 ---the user, once, through `vim.notify` why the requested scope was not shown.
 ---
+---`resolve` and `resolve_sync` run the same flow with the two chains, and every
+---asynchronous callback prohub delivers runs later on the main loop, never
+---inline with the call that started the work.
+---
 ---    local scope = require('prohub.scope')
 ---
 ---    scope.resolve(path, 'branch', function(result, err) end)
@@ -25,9 +29,10 @@
 local M = {}
 
 local base = require('prohub.base')
+local chain = require('prohub.chain')
 local config = require('prohub.config')
-local git = require('prohub.git')
 local log = require('prohub.log')
+local paths = require('prohub.path')
 local validate = require('prohub.validate')
 
 ---What a review needs to know about the changes it shows.
@@ -69,7 +74,7 @@ local function check_inputs(path, name)
     if not config.scopes[name] then
         return nil, ('prohub: unknown scope: %s'):format(name)
     end
-    return git.check_path(path)
+    return paths.check(path)
 end
 
 ---@param text string
@@ -133,12 +138,13 @@ local function unpushed_reason(refs, base_reason)
     return table.concat(missing, ', ')
 end
 
----Tell the user which changes are shown instead, naming the scope that was
----asked for, the worktree and the reason, in one line.
----@param name prohub.Scope
+---The result of a scope that cannot be resolved: the uncommitted changes,
+---after telling the user why the requested scope is not shown.
+---@param name prohub.Scope The scope that was asked for.
 ---@param path string
 ---@param reason string
-local function report_fallback(name, path, reason)
+---@return prohub.ScopeResult
+local function fallback(name, path, reason)
     log.debug('the %s scope of %s: %s', name, path, reason)
     vim.notify(
         (
@@ -147,125 +153,100 @@ local function report_fallback(name, path, reason)
         ):format(name, path, reason),
         vim.log.levels.WARN
     )
+    return { scope = 'uncommitted' }
 end
 
----Deliver a result on the main loop, where the caller can use the API.
----@param callback fun(result: prohub.ScopeResult?, err: string?)
----@param result prohub.ScopeResult?
----@param err string?
-local function deliver(callback, result, err)
-    vim.schedule(function()
-        callback(result, err)
-    end)
-end
-
----Deliver the uncommitted scope, after telling the user why the requested one
----is not shown.
----@param callback fun(result: prohub.ScopeResult?, err: string?)
----@param name prohub.Scope The scope that was asked for.
+---The steps of the branch scope: the base of the worktree, or the fallback.
 ---@param path string
----@param reason string
-local function deliver_fallback(callback, name, path, reason)
-    report_fallback(name, path, reason)
-    deliver(callback, { scope = 'uncommitted' })
-end
-
----Resolve the branch scope without blocking the editor.
----@param path string
----@param callback fun(result: prohub.ScopeResult?, err: string?)
----@return true|nil ok
----@return string? err
-local function resolve_branch(path, callback)
-    local started, err = base.resolve(path, function(result, base_err)
-        if not result then
-            return deliver(callback, nil, base_err)
-        end
-        if not result.base then
-            return deliver_fallback(
-                callback,
-                'branch',
-                path,
-                result.reason or 'no base'
-            )
-        end
-        deliver(callback, { scope = 'branch', base = result.base })
-    end)
-    if not started then
-        return nil, err
-    end
-    return true
-end
-
----Resolve the unpushed scope without blocking the editor.
----@param path string
----@param callback fun(result: prohub.ScopeResult?, err: string?)
----@return true|nil ok
----@return string? err
-local function resolve_unpushed(path, callback)
-    local started, err = git.run(path, refs_command, function(out, refs_err)
-        if not out then
-            return deliver(callback, nil, refs_err)
-        end
-
-        local refs = parse_refs(out)
-        local ref = remote_ref(refs)
-        if ref then
-            local began, begin_err = git.run(
-                path,
-                merge_base_command(ref),
-                function(commit, merge_err)
-                    if not commit then
-                        return deliver(callback, nil, merge_err)
-                    end
-                    deliver(callback, {
-                        scope = 'unpushed',
-                        base = vim.trim(commit),
-                    })
-                end
-            )
-            if not began then
-                deliver(callback, nil, begin_err)
-            end
-            return
-        end
-
-        -- A branch with no remote counterpart has the same unpushed changes as
-        -- session changes, so the base is the revision itself.
-        local began, begin_err = base.resolve(path, function(result, base_err)
+---@param options prohub.Config
+---@return prohub.chain.Flow
+local function branch_flow(path, options)
+    local resolve_base = base.flow(path, options)
+    return function(run, done)
+        resolve_base(run, function(result, err)
             if not result then
-                return deliver(callback, nil, base_err)
+                return done(nil, err)
             end
-            if result.base then
-                return deliver(callback, {
-                    scope = 'unpushed',
-                    base = result.base,
-                })
+            if not result.base then
+                return done(
+                    fallback('branch', path, result.reason or 'no base')
+                )
             end
-            deliver_fallback(
-                callback,
-                'unpushed',
-                path,
-                unpushed_reason(refs, result.reason)
-            )
+            done({ scope = 'branch', base = result.base })
         end)
-        if not began then
-            deliver(callback, nil, begin_err)
-        end
-    end)
-    if not started then
-        return nil, err
     end
-    return true
+end
+
+---The steps of the unpushed scope: the last commit `HEAD` shares with its
+---remote counterpart, else the base of the worktree, else the fallback.
+---@param path string
+---@param options prohub.Config
+---@return prohub.chain.Flow
+local function unpushed_flow(path, options)
+    local resolve_base = base.flow(path, options)
+    return function(run, done)
+        run(refs_command, function(out, err)
+            if not out then
+                return done(nil, err)
+            end
+
+            local refs = parse_refs(out)
+            local ref = remote_ref(refs)
+            if ref then
+                run(merge_base_command(ref), function(commit, merge_err)
+                    if not commit then
+                        return done(nil, merge_err)
+                    end
+                    done({ scope = 'unpushed', base = vim.trim(commit) })
+                end)
+                return
+            end
+
+            -- A branch with no remote counterpart has the same unpushed changes
+            -- as session changes, so the base is the revision itself.
+            resolve_base(run, function(result, base_err)
+                if not result then
+                    return done(nil, base_err)
+                end
+                if result.base then
+                    return done({ scope = 'unpushed', base = result.base })
+                end
+                done(
+                    fallback(
+                        'unpushed',
+                        path,
+                        unpushed_reason(refs, result.reason)
+                    )
+                )
+            end)
+        end)
+    end
+end
+
+---The steps of one scope.
+---@param path string
+---@param name prohub.Scope
+---@param options prohub.Config
+---@return prohub.chain.Flow
+local function flow(path, name, options)
+    if name == 'uncommitted' then
+        return function(_, done)
+            done({ scope = 'uncommitted' })
+        end
+    end
+    if name == 'branch' then
+        return branch_flow(path, options)
+    end
+    return unpushed_flow(path, options)
 end
 
 ---Turn a scope into the revision a review needs without blocking the editor.
 ---
----Return `nil` and an error for invalid arguments, an invalid path, an unknown
----scope or a git command that cannot be started, without calling the callback.
----Otherwise the callback receives the result, or `nil` and an error, later on
----the main loop. A scope that cannot be resolved is not an error: the result
----then names the uncommitted scope, which has no revision, and the user is
----told why.
+---Return `nil` and an error for invalid arguments, an invalid path or an
+---unknown scope, without calling the callback. Otherwise the callback receives
+---the result, or `nil` and an error, later on the main loop. A scope that
+---cannot be resolved is not an error: the result then names the uncommitted
+---scope, which has no revision, and the user is told why.
 ---@param path string Absolute path of the worktree.
 ---@param name prohub.Scope Which changes the review shows.
 ---@param callback fun(result: prohub.ScopeResult?, err: string?)
@@ -281,63 +262,12 @@ function M.resolve(path, name, callback)
         return nil, err
     end
 
-    if name == 'uncommitted' then
-        deliver(callback, { scope = 'uncommitted' })
-        return true
-    end
-    if name == 'branch' then
-        return resolve_branch(path, callback)
-    end
-    return resolve_unpushed(path, callback)
-end
-
----Resolve the branch scope and wait for git. Prefer `resolve` anywhere the
----editor should stay responsive.
----@param path string
----@return prohub.ScopeResult? result
----@return string? err
-local function resolve_branch_sync(path)
-    local result, err = base.resolve_sync(path)
-    if not result then
-        return nil, err
-    end
-    if not result.base then
-        report_fallback('branch', path, result.reason or 'no base')
-        return { scope = 'uncommitted' }
-    end
-    return { scope = 'branch', base = result.base }
-end
-
----Resolve the unpushed scope and wait for git.
----@param path string
----@return prohub.ScopeResult? result
----@return string? err
-local function resolve_unpushed_sync(path)
-    local out, err = git.run_sync(path, refs_command)
-    if not out then
-        return nil, err
+    local options, options_err = config.get()
+    if not options then
+        return nil, options_err
     end
 
-    local refs = parse_refs(out)
-    local ref = remote_ref(refs)
-    if ref then
-        local commit, merge_err = git.run_sync(path, merge_base_command(ref))
-        if not commit then
-            return nil, merge_err
-        end
-        return { scope = 'unpushed', base = vim.trim(commit) }
-    end
-
-    local result, base_err = base.resolve_sync(path)
-    if not result then
-        return nil, base_err
-    end
-    if result.base then
-        return { scope = 'unpushed', base = result.base }
-    end
-
-    report_fallback('unpushed', path, unpushed_reason(refs, result.reason))
-    return { scope = 'uncommitted' }
+    return chain.run(path, flow(path, name, options), callback)
 end
 
 ---Turn a scope into the revision a review needs and wait for git. Prefer
@@ -353,13 +283,12 @@ function M.resolve_sync(path, name)
         return nil, err
     end
 
-    if name == 'uncommitted' then
-        return { scope = 'uncommitted' }
+    local options, options_err = config.get()
+    if not options then
+        return nil, options_err
     end
-    if name == 'branch' then
-        return resolve_branch_sync(path)
-    end
-    return resolve_unpushed_sync(path)
+
+    return chain.run_sync(path, flow(path, name, options))
 end
 
 return M

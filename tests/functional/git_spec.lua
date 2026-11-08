@@ -8,10 +8,11 @@ local spawns = require('helpers.spawns')
 ---@param args any
 ---@return string? out
 ---@return string? err
+---@return integer? code
 local function run(path, args)
-    local done, out, err
-    local ok, start_err = prohub_git.run(path, args, function(o, e)
-        out, err, done = o, e, true
+    local done, out, err, code
+    local ok, start_err = prohub_git.run(path, args, function(o, e, c)
+        out, err, code, done = o, e, c, true
     end)
     if not ok then
         return nil, start_err
@@ -22,7 +23,7 @@ local function run(path, args)
         end),
         'the callback was not called'
     )
-    return out, err
+    return out, err, code
 end
 
 ---Run `fn` with every GIT_ variable removed from the environment of the
@@ -235,6 +236,30 @@ describe('prohub.git', function()
                 assert.is_truthy(err:find('fatal', 1, true))
             end)
 
+            it('returns the exit status of the command', function()
+                local project = git.project()
+
+                local out, err, code = run_git(
+                    project.path,
+                    { 'rev-parse', '--verify', 'missing' }
+                )
+
+                assert.is_nil(out)
+                assert.is_truthy(err:find('failed', 1, true))
+                assert.are.equal(128, code)
+            end)
+
+            it('returns the exit status of a command that succeeded', function()
+                local project = git.project()
+
+                local out, err, code =
+                    run_git(project.path, { 'rev-parse', 'HEAD' })
+
+                assert.is_truthy(out:find('^%x+%s*$'))
+                assert.is_nil(err)
+                assert.are.equal(0, code)
+            end)
+
             it('returns an error for arguments of the wrong type', function()
                 local project = git.project()
 
@@ -266,31 +291,6 @@ describe('prohub.git', function()
             end)
         end)
     end
-
-    describe('check_path', function()
-        it('accepts an absolute directory', function()
-            local project = git.project()
-
-            assert.is_true(prohub_git.check_path(project.path))
-        end)
-
-        it('returns an error for a path that cannot be a worktree', function()
-            local project = git.project()
-            local cases = {
-                { nil, 'path' },
-                { 'relative/dir', 'must be absolute' },
-                { plain .. '/missing', 'does not exist' },
-                { project.path .. '/README.md', 'is not a directory' },
-            }
-
-            for _, case in ipairs(cases) do
-                local ok, err = prohub_git.check_path(case[1])
-
-                assert.is_nil(ok)
-                assert.is_truthy(err:find(case[2], 1, true))
-            end
-        end)
-    end)
 
     describe('run', function()
         it('calls back on the main loop, after it returned', function()

@@ -1,8 +1,10 @@
 local git = require('helpers.git')
 local log = require('prohub.log')
 
----The module under test.
+---The modules under test.
 local base = require('prohub.base')
+local chain = require('prohub.chain')
+local config = require('prohub.config')
 
 describe('prohub.base', function()
     local logs
@@ -239,6 +241,37 @@ describe('prohub.base', function()
             assert.is_nil(ok)
             assert.is_truthy(err:find('path', 1, true))
         end)
+    end)
+
+    describe('flow', function()
+        it("hands the steps of a resolution to the caller's chain", function()
+            local _, feature = feature_project()
+            local options = assert(config.get())
+
+            local result, err =
+                chain.run_sync(feature.path, base.flow(feature.path, options))
+
+            assert.are.same({ base.resolve_sync(feature.path) }, { result })
+            assert.is_nil(err)
+        end)
+    end)
+
+    describe('both forms', function()
+        it(
+            'report the same error when a command after the refs fails',
+            function()
+                local _, feature = feature_project()
+                feature:git('symbolic-ref', 'HEAD', 'refs/heads/unborn')
+
+                local sync_result, sync_err = base.resolve_sync(feature.path)
+                local async_result, async_err = resolve_async(feature.path)
+
+                assert.is_nil(sync_result)
+                assert.is_truthy(sync_err:find('rev-parse', 1, true))
+                assert.is_nil(async_result)
+                assert.are.equal(sync_err, async_err)
+            end
+        )
     end)
 
     describe('resolve_sync', function()

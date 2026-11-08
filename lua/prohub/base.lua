@@ -17,6 +17,11 @@
 ---are errors. "On the default branch" means the current branch of the worktree
 ---carries the name of the default branch.
 ---
+---`resolve` and `resolve_sync` run the same flow, and every asynchronous
+---callback prohub delivers runs later on the main loop, never inline with the
+---call that started the work. `flow` hands that flow to a caller that runs it
+---with a chain of its own, which is how `prohub.scope` reuses the resolution.
+---
 ---    local base = require('prohub.base')
 ---
 ---    base.resolve(path, function(result, err) end)
@@ -24,9 +29,10 @@
 ---@class prohub.base
 local M = {}
 
+local chain = require('prohub.chain')
 local config = require('prohub.config')
-local git = require('prohub.git')
 local log = require('prohub.log')
+local paths = require('prohub.path')
 local validate = require('prohub.validate')
 
 ---The result of a resolution. `base` and `reason` never appear together: the
@@ -132,8 +138,8 @@ local function default_branch(option, refs)
     end
 end
 
----Decide whether a base can exist. Both forms of the command share this
----decision, so they only differ in how they run git.
+---Decide whether a base can exist. The flow makes this decision, so both
+---forms of the command agree on it.
 ---@param branch string? Name of the default branch, `nil` when none exists.
 ---@param ref string? Ref of the default branch.
 ---@param current string? Name of the current branch. It is only read when a
@@ -169,58 +175,83 @@ local function result_of(decision, commit)
     return result
 end
 
----Classify a failed merge-base. A repository whose histories do not meet makes
----git exit with status 1 and print nothing, which is the `no common history`
----result and not a failure. Every other failure carries git's own message and
----stays an error.
----@param decision prohub.base.Decision
----@param err string
----@return prohub.Base? result
----@return string? failure
-local function merge_base_outcome(decision, err)
-    if err:match(': exit code 1$') then
-        return result_of(decision)
-    end
-    log.debug('the merge-base failed: %s', err)
-    return nil, err
-end
-
 ---@param ref string
 ---@return string[] command
 local function merge_base_command(ref)
     return { 'merge-base', 'HEAD', ref }
 end
 
----The refs of a project, read without blocking the editor.
+---The log line of a base that does not exist, and the result it belongs to.
 ---@param path string
----@param callback fun(refs: prohub.base.Refs?, err: string?)
-local function read_refs(path, callback)
-    return git.run(path, refs_command, function(out, err)
-        if not out then
-            return callback(nil, err)
-        end
-        callback(parse_refs(out))
-    end)
+---@param decision prohub.base.Decision
+---@return prohub.Base
+local function missing_base(path, decision)
+    log.debug(
+        'base of %s: %s (%s)',
+        path,
+        decision.reason,
+        decision.branch or 'no branch'
+    )
+    return result_of(decision)
 end
 
----The name of the current branch, read without blocking the editor.
----@param path string
----@param callback fun(current: string?, err: string?)
-local function read_current(path, callback)
-    return git.run(path, current_command, function(out, err)
-        if not out then
-            return callback(nil, err)
-        end
-        callback(vim.trim(out))
-    end)
+---The steps of a resolution: read the refs, decide, read the current branch
+---when the decision needs it, and find the merge-base. `resolve` and
+---`resolve_sync` run them with the two chains, and so does `prohub.scope` when
+---it falls back to the base of a worktree.
+---@param path string Absolute path of the worktree.
+---@param options prohub.Config The options in use.
+---@return prohub.chain.Flow
+function M.flow(path, options)
+    return function(run, done)
+        run(refs_command, function(out, err)
+            if not out then
+                return done(nil, err)
+            end
+
+            local branch, ref =
+                default_branch(options.default_branch, parse_refs(out))
+            if not branch then
+                return done(missing_base(path, decide(nil)))
+            end
+
+            run(current_command, function(current, current_err)
+                if not current then
+                    return done(nil, current_err)
+                end
+
+                local decision = decide(branch, ref, vim.trim(current))
+                if decision.reason then
+                    return done(missing_base(path, decision))
+                end
+
+                run(
+                    merge_base_command(decision.ref),
+                    function(commit, merge_err, code)
+                        if commit then
+                            return done(result_of(decision, vim.trim(commit)))
+                        end
+                        if code == 1 then
+                            -- Histories that do not meet make merge-base exit
+                            -- with status 1 and print nothing, which is a base
+                            -- that does not exist and not a failure.
+                            return done(result_of(decision))
+                        end
+                        log.debug('the merge-base failed: %s', merge_err)
+                        done(nil, merge_err)
+                    end
+                )
+            end)
+        end)
+    end
 end
 
 ---Resolve the base of a worktree without blocking the editor.
 ---
----Return `nil` and an error for invalid arguments, an invalid path or a git
----command that cannot be started, without calling the callback. Otherwise the
----callback receives the result, or `nil` and an error, on the main loop. A
----result without a base is the normal answer for a worktree that has none.
+---Return `nil` and an error for invalid arguments or an invalid path, without
+---calling the callback. Otherwise the callback receives the result, or `nil`
+---and an error, later on the main loop. A result without a base is the normal
+---answer for a worktree that has none.
 ---@param path string Absolute path of the worktree.
 ---@param callback fun(result: prohub.Base?, err: string?)
 ---@return true|nil ok
@@ -234,81 +265,17 @@ function M.resolve(path, callback)
         return nil, err
     end
 
+    ok, err = paths.check(path)
+    if not ok then
+        return nil, err
+    end
+
     local options, options_err = config.get()
     if not options then
         return nil, options_err
     end
 
-    local function finish(decision)
-        if decision.reason then
-            log.debug(
-                'base of %s: %s (%s)',
-                path,
-                decision.reason,
-                decision.branch or 'no branch'
-            )
-            return callback(result_of(decision))
-        end
-
-        local started, start_err = git.run(
-            path,
-            merge_base_command(decision.ref),
-            function(out, run_err)
-                if not out then
-                    return callback(merge_base_outcome(decision, run_err))
-                end
-                callback(result_of(decision, vim.trim(out)))
-            end
-        )
-        if not started then
-            callback(nil, start_err)
-        end
-    end
-
-    local began, begin_err = read_refs(path, function(refs, read_err)
-        if not refs then
-            return callback(nil, read_err)
-        end
-
-        local branch, ref = default_branch(options.default_branch, refs)
-        if not branch then
-            return finish(decide(nil))
-        end
-
-        local read, read_err = read_current(path, function(current)
-            finish(decide(branch, ref, current))
-        end)
-        if not read then
-            callback(nil, read_err)
-        end
-    end)
-    if not began then
-        return nil, begin_err
-    end
-
-    return true
-end
-
----@param path string
----@return prohub.base.Refs? refs
----@return string? err
-local function read_refs_sync(path)
-    local out, err = git.run_sync(path, refs_command)
-    if not out then
-        return nil, err
-    end
-    return parse_refs(out)
-end
-
----@param path string
----@return string? current
----@return string? err
-local function read_current_sync(path)
-    local out, err = git.run_sync(path, current_command)
-    if not out then
-        return nil, err
-    end
-    return vim.trim(out)
+    return chain.run(path, M.flow(path, options), callback)
 end
 
 ---Resolve the base of a worktree and wait for git. Prefer `resolve` anywhere
@@ -322,38 +289,17 @@ function M.resolve_sync(path)
         return nil, err
     end
 
+    ok, err = paths.check(path)
+    if not ok then
+        return nil, err
+    end
+
     local options, options_err = config.get()
     if not options then
         return nil, options_err
     end
 
-    local refs, refs_err = read_refs_sync(path)
-    if not refs then
-        return nil, refs_err
-    end
-
-    local branch, ref = default_branch(options.default_branch, refs)
-    if not branch then
-        return result_of(decide(nil))
-    end
-
-    local current, current_err = read_current_sync(path)
-    if not current then
-        return nil, current_err
-    end
-
-    local decision = decide(branch, ref, current)
-    if decision.reason then
-        log.debug('base of %s: %s', path, decision.reason)
-        return result_of(decision)
-    end
-
-    local out, merge_err = git.run_sync(path, merge_base_command(decision.ref))
-    if not out then
-        return merge_base_outcome(decision, merge_err)
-    end
-
-    return result_of(decision, vim.trim(out))
+    return chain.run_sync(path, M.flow(path, options))
 end
 
 return M
