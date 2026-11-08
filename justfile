@@ -31,12 +31,14 @@ test *paths:
 		exit
 	fi
 
-	# One editor per spec file, and every file runs even after a failure.
+	# One editor per spec file, and every file runs even after a failure. The
+	# harness runs the file in a child editor and kills it when it outlasts the
+	# timeout of the harness, so a spec that blocks fails instead of hanging.
 	status=0
 	for path in "$@"; do
 		nvim --headless --noplugin \
 			-u "${minimal_init}" \
-			-c "lua require('plenary.busted').run(vim.fn.fnamemodify('${path}', ':p'))" \
+			-c "lua require('plenary.test_harness').test_directory('${path}', { minimal_init = '${minimal_init}', sequential = true })" \
 			|| status=$?
 	done
 	exit "${status}"
