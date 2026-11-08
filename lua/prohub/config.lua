@@ -74,7 +74,8 @@ local scopes = {
 ---@type table<string, true>
 M.scopes = scopes
 
----The options a user can set.
+---The options a user can set. It stays a list of its own, because
+---`default_branch` defaults to `nil` and so has no key in `defaults`.
 ---@type table<string, true>
 local names = {
     default_scope = true,
@@ -83,16 +84,6 @@ local names = {
     refresh_interval = true,
     worksets = true,
     keymaps = true,
-}
-
----The keymaps of the hub.
----@type table<string, true>
-local keymap_names = {
-    review = true,
-    scope = true,
-    refresh = true,
-    close = true,
-    help = true,
 }
 
 ---@param value any
@@ -126,18 +117,7 @@ end
 ---@param value any
 ---@return boolean
 local function is_workset(value)
-    if type(value) == 'function' then
-        return true
-    end
-    if not vim.islist(value) then
-        return false
-    end
-    for _, entry in ipairs(value) do
-        if type(entry) ~= 'string' then
-            return false
-        end
-    end
-    return true
+    return type(value) == 'function' or validate.is_string_list(value)
 end
 
 ---Check the merged options. Every message names the option, so a mistake in
@@ -183,7 +163,7 @@ local function check_options(options)
     end
 
     for name, value in pairs(options.keymaps) do
-        if not keymap_names[name] then
+        if defaults.keymaps[name] == nil then
             return nil,
                 ('prohub: keymaps.%s: unknown option'):format(tostring(name))
         end
@@ -221,27 +201,6 @@ end
 ---@type table
 local stored = {}
 
----Copy a table, keeping any function it holds by reference.
----@param value any
----@return any
-local function copy(value)
-    if type(value) ~= 'table' then
-        return value
-    end
-
-    local result = {}
-    for key, item in pairs(value) do
-        result[key] = copy(item)
-    end
-    return result
-end
-
----@param value any
----@return boolean
-local function is_table(value)
-    return type(value) == 'table'
-end
-
 ---Overlay one layer of options on another. Omitted fields keep the value they
 ---already have, and `keymaps` is merged key by key, so overriding one keymap
 ---keeps the others.
@@ -249,9 +208,9 @@ end
 ---@param layer table
 ---@return table
 local function merge(base, layer)
-    local result = copy(base)
+    local result = vim.deepcopy(base)
     for name, value in pairs(layer) do
-        if name == 'keymaps' and is_table(value) then
+        if name == 'keymaps' and type(value) == 'table' then
             result.keymaps =
                 vim.tbl_extend('force', result.keymaps or {}, value)
         else
@@ -311,7 +270,7 @@ function M.setup(opts)
         return nil, gerr
     end
 
-    local layer = opts and copy(opts) or {}
+    local layer = opts and vim.deepcopy(opts) or {}
     local options = merge(merge(merge(defaults, global), stored), layer)
     ok, err = check_options(options)
     if not ok then

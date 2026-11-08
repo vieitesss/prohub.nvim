@@ -228,6 +228,18 @@ describe('prohub.config', function()
         assert.same({ 'a' }, config.get().worksets['/projects/one'])
     end)
 
+    it('keeps the function of a workset as it is given', function()
+        local entries = function()
+            return {}
+        end
+
+        assert.is_true(
+            config.setup({ worksets = { ['/projects/one'] = entries } })
+        )
+
+        assert.are.equal(entries, config.get().worksets['/projects/one'])
+    end)
+
     it('is reached through prohub.setup', function()
         local prohub = require('prohub')
 
