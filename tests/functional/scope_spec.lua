@@ -220,6 +220,14 @@ describe('prohub.scope', function()
                     assert.are.equal(1, #calls)
                     assert.are.equal(vim.log.levels.WARN, calls[1].level)
                     assert.is_truthy(calls[1].message:find('no base', 1, true))
+                    assert.is_truthy(
+                        calls[1].message:find(
+                            'origin/main shares no history with HEAD',
+                            1,
+                            true
+                        )
+                    )
+                    assert.is_nil(calls[1].message:find('no upstream', 1, true))
                 end
             )
 

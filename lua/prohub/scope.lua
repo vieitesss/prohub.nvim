@@ -69,13 +69,19 @@ local function merge_base_command(ref)
 end
 
 ---Why the unpushed changes have no revision. Every part that was missing is
----named, so the user can tell which one to fix.
+---named, so the user can tell which one to fix. A counterpart that the refs
+---name is only passed over when it shares no history with `HEAD`.
 ---@param known prohub.Refs The refs of the worktree.
 ---@param base_reason string? Why the base of the worktree is missing.
 ---@return string
 local function unpushed_reason(known, base_reason)
     local missing = {}
-    if known.branch then
+    if known.counterpart then
+        table.insert(
+            missing,
+            known.counterpart .. ' shares no history with HEAD'
+        )
+    elseif known.branch then
         table.insert(missing, 'no upstream')
         table.insert(missing, 'no origin/' .. known.branch)
     else
