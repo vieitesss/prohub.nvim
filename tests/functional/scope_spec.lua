@@ -365,4 +365,42 @@ describe('prohub.scope', function()
             assert.is_truthy(err:find('not a git repository', 1, true))
         end)
     end)
+
+    describe('names', function()
+        it('lists every scope in a stable order', function()
+            assert.are.same(scope.names(), scope.names())
+            assert.are.same(
+                { 'branch', 'uncommitted', 'unpushed' },
+                scope.names()
+            )
+        end)
+    end)
+
+    describe('check', function()
+        it('accepts every scope it lists', function()
+            for _, name in ipairs(scope.names()) do
+                local ok, err = scope.check(name)
+
+                assert.is_nil(err)
+                assert.is_true(ok)
+            end
+        end)
+
+        it('names the valid scopes when the name is not one', function()
+            local ok, err = scope.check('everything')
+
+            assert.is_nil(ok)
+            assert.is_truthy(err:find('unknown scope: everything', 1, true))
+            for _, name in ipairs(scope.names()) do
+                assert.is_truthy(err:find(name, 1, true))
+            end
+        end)
+
+        it('returns an error for a name that is not a string', function()
+            local ok, err = scope.check(nil)
+
+            assert.is_nil(ok)
+            assert.is_truthy(err:find('scope', 1, true))
+        end)
+    end)
 end)

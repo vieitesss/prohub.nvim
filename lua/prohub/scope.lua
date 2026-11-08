@@ -53,12 +53,9 @@ local validate = require('prohub.validate')
 ---@return true|nil ok
 ---@return string? err
 local function check_inputs(path, name)
-    local ok, err = validate.check({ scope = { name, 'string' } })
+    local ok, err = M.check(name)
     if not ok then
         return nil, err
-    end
-    if not config.scopes[name] then
-        return nil, ('prohub: unknown scope: %s'):format(name)
     end
     return paths.check(path)
 end
@@ -266,6 +263,35 @@ function M.counterpart_flow(path)
             done(known.counterpart)
         end)
     end
+end
+
+---The scopes a review can show, in a stable order, which is the order an error
+---message lists them in.
+---@return prohub.Scope[]
+function M.names()
+    local names = vim.tbl_keys(config.scopes)
+    table.sort(names)
+    return names
+end
+
+---Check that a value names a scope. A name that is not one returns an error
+---that lists the valid ones.
+---@param name any
+---@return true|nil ok
+---@return string? err
+function M.check(name)
+    local ok, err = validate.check({ scope = { name, 'string' } })
+    if not ok then
+        return nil, err
+    end
+    if not config.scopes[name] then
+        return nil,
+            ('prohub: unknown scope: %s (valid scopes: %s)'):format(
+                name,
+                table.concat(M.names(), ', ')
+            )
+    end
+    return true
 end
 
 return M
