@@ -43,6 +43,23 @@ describe('prohub.scope', function()
         return project, feature
     end
 
+    ---Push a commit with no parents as `origin/<branch>`, so the remote
+    ---counterpart of the branch shares no history with its `HEAD`.
+    ---@param tree helpers.git.Tree
+    ---@param branch string
+    local function unrelated_counterpart(tree, branch)
+        tree:remote()
+        local orphan =
+            tree:git('commit-tree', 'HEAD^{tree}', '-m', 'unrelated history')
+        tree:git(
+            'push',
+            '--quiet',
+            '--force',
+            'origin',
+            orphan .. ':refs/heads/' .. branch
+        )
+    end
+
     ---Run the command asynchronously and wait for its callback.
     ---@param path string
     ---@param name prohub.Scope
@@ -169,6 +186,42 @@ describe('prohub.scope', function()
                 }, result)
                 assert.are.same({}, calls)
             end)
+
+            it(
+                'uses the base when origin/<branch> shares no history',
+                function()
+                    local project, feature = feature_project()
+                    unrelated_counterpart(feature, 'feature')
+                    local calls = capture()
+
+                    local result, err = resolve(feature.path, 'unpushed')
+
+                    assert.is_nil(err)
+                    assert.are.same({
+                        scope = 'unpushed',
+                        base = project:git('rev-parse', 'main'),
+                    }, result)
+                    assert.are.same({}, calls)
+                end
+            )
+
+            it(
+                'falls back when origin/<branch> shares no history and there '
+                    .. 'is no base',
+                function()
+                    local project = git.project()
+                    unrelated_counterpart(project, 'main')
+                    local calls = capture()
+
+                    local result, err = resolve(project.path, 'unpushed')
+
+                    assert.is_nil(err)
+                    assert.are.same({ scope = 'uncommitted' }, result)
+                    assert.are.equal(1, #calls)
+                    assert.are.equal(vim.log.levels.WARN, calls[1].level)
+                    assert.is_truthy(calls[1].message:find('no base', 1, true))
+                end
+            )
 
             it(
                 'falls back to uncommitted when unpushed has no revision',

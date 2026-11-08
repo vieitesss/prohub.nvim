@@ -9,7 +9,9 @@
 ---
 --- - `branch` is the base of the worktree, as `prohub.base` resolves it.
 --- - `unpushed` is the last commit `HEAD` shares with its remote counterpart,
----   which is the configured upstream, else `origin/<branch>`, else the base.
+---   which is the configured upstream, else `origin/<branch>`. A branch with
+---   no counterpart, or with one that shares no history with `HEAD`, uses the
+---   base instead.
 --- - `uncommitted` needs no revision.
 ---
 ---The rule for the remote counterpart of a branch has one home, in
@@ -126,7 +128,8 @@ local function branch_flow(path, options)
 end
 
 ---The steps of the unpushed scope: the last commit `HEAD` shares with its
----remote counterpart, else the base of the worktree, else the fallback.
+---remote counterpart, else the base of the worktree, else the fallback. A
+---counterpart that shares no history with `HEAD` counts as none.
 ---@param path string
 ---@param options prohub.Config
 ---@return prohub.chain.Flow
@@ -139,36 +142,49 @@ local function unpushed_flow(path, options)
                 return done(nil, err)
             end
 
-            if known.counterpart then
-                run(
-                    merge_base_command(known.counterpart),
-                    function(commit, merge_err)
-                        if not commit then
-                            return done(nil, merge_err)
-                        end
-                        done({ scope = 'unpushed', base = vim.trim(commit) })
-                    end
-                )
-                return
-            end
-
             -- A branch with no remote counterpart has the same unpushed changes
             -- as session changes, so the base is the revision itself.
-            resolve_base(run, function(result, base_err)
-                if not result then
-                    return done(nil, base_err)
-                end
-                if result.base then
-                    return done({ scope = 'unpushed', base = result.base })
-                end
-                done(
-                    fallback(
-                        'unpushed',
-                        path,
-                        unpushed_reason(known, result.reason)
+            local function from_base()
+                resolve_base(run, function(result, base_err)
+                    if not result then
+                        return done(nil, base_err)
+                    end
+                    if result.base then
+                        return done({ scope = 'unpushed', base = result.base })
+                    end
+                    done(
+                        fallback(
+                            'unpushed',
+                            path,
+                            unpushed_reason(known, result.reason)
+                        )
                     )
-                )
-            end)
+                end)
+            end
+
+            if not known.counterpart then
+                return from_base()
+            end
+
+            run(
+                merge_base_command(known.counterpart),
+                function(commit, merge_err, code)
+                    if commit then
+                        return done({
+                            scope = 'unpushed',
+                            base = vim.trim(commit),
+                        })
+                    end
+                    if code == 1 then
+                        -- A counterpart that shares no history with HEAD makes
+                        -- merge-base exit with status 1, and every commit of
+                        -- HEAD is then unpushed, as on a branch with no
+                        -- counterpart.
+                        return from_base()
+                    end
+                    done(nil, merge_err)
+                end
+            )
         end)
     end
 end
