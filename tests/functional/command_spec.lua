@@ -454,6 +454,8 @@ describe('prohub.command', function()
     end)
 
     it('never throws and never notifies while completing', function()
+        local project = git.project()
+        enter(project.path)
         local messages = collect_notifications()
         local calls = {
             { '', 'ProhubReview ', 13 },
