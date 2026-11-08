@@ -265,17 +265,18 @@ describe('prohub.status', function()
             assert.are.equal(1, result.changed)
         end)
 
-        it('uses few git commands for one worktree', function()
+        it('reads a pushed worktree in five git commands', function()
             local project, feature = feature_project()
             project:push()
             feature:push()
             feature:commit('b.txt', 'b')
 
+            -- status, for-each-ref, merge-base, rev-list and diff.
             local commands = spawns.commands(function()
                 collect(feature.path)
             end)
 
-            assert.is_true(#commands <= 6, #commands)
+            assert.are.equal(5, #commands)
         end)
 
         it('returns an error for a missing path', function()

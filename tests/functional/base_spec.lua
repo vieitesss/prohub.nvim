@@ -267,7 +267,7 @@ describe('prohub.base', function()
                 local async_result, async_err = resolve_async(feature.path)
 
                 assert.is_nil(sync_result)
-                assert.is_truthy(sync_err:find('rev-parse', 1, true))
+                assert.is_truthy(sync_err:find('merge-base', 1, true))
                 assert.is_nil(async_result)
                 assert.are.equal(sync_err, async_err)
             end

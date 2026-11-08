@@ -9,6 +9,10 @@
 ---otherwise, because the remote ref is what the rest of the project shares. An
 ---option that names no branch falls through to the rest of the order.
 ---
+---The refs of the project and the branch the worktree has checked out come from
+---one read of `prohub.refs`, so a resolution reads git once before the
+---merge-base.
+---
 ---The base itself is the merge-base between `HEAD` and that ref. The worktree
 ---has no base when the project has no default branch, when the worktree is on
 ---the default branch, or when the two have no common history: in those cases
@@ -33,6 +37,7 @@ local chain = require('prohub.chain')
 local config = require('prohub.config')
 local log = require('prohub.log')
 local paths = require('prohub.path')
+local refs = require('prohub.refs')
 local validate = require('prohub.validate')
 
 ---The result of a resolution. `base` and `reason` never appear together: the
@@ -53,67 +58,15 @@ local validate = require('prohub.validate')
 ---@field ref string? Ref of the default branch.
 ---@field reason string? Why no base can exist.
 
----The refs that may hold the default branch. `refs/heads` and
----`refs/remotes/origin` cover every candidate, and `%(symref)` names the branch
----`origin/HEAD` points at. One command answers every question about the refs.
----@type string[]
-local refs_command = {
-    'for-each-ref',
-    '--format=%(refname)%09%(symref)',
-    'refs/heads',
-    'refs/remotes/origin',
-}
-
----The command that names the current branch. It prints `HEAD` when HEAD is
----detached, so it never fails for that reason.
----@type string[]
-local current_command = { 'rev-parse', '--abbrev-ref', 'HEAD' }
-
----The refs of a project, as far as the default branch is concerned.
----@class prohub.base.Refs
----@field present table<string, true> Full names of the refs that exist.
----@field origin_head string? Full name of the ref `origin/HEAD` points at.
-
----Turn the output of `refs_command` into the refs a decision reads.
----@param text string
----@return prohub.base.Refs
-local function parse_refs(text)
-    local refs = { present = {} }
-    for _, line in ipairs(vim.split(text, '\n', { plain = true })) do
-        local name, symref = line:match('^([^\t]+)\t(.*)$')
-        if name then
-            refs.present[name] = true
-            if name == 'refs/remotes/origin/HEAD' and symref ~= '' then
-                refs.origin_head = symref
-            end
-        end
-    end
-    return refs
-end
-
----The ref to use for a branch: the remote-tracking ref of `origin` when it
----exists, and the local ref otherwise.
----@param refs prohub.base.Refs
----@param name string Name of the branch, without a remote prefix.
----@return string? ref
-local function ref_of(refs, name)
-    if refs.present['refs/remotes/origin/' .. name] then
-        return 'origin/' .. name
-    end
-    if refs.present['refs/heads/' .. name] then
-        return name
-    end
-end
-
 ---The name and the ref of the default branch, in the order the option, then
 ---`origin/HEAD`, then a local `main`, then a local `master` define.
 ---@param option string? The `default_branch` option.
----@param refs prohub.base.Refs
+---@param known prohub.Refs The refs of the worktree.
 ---@return string? branch
 ---@return string? ref
-local function default_branch(option, refs)
+local function default_branch(option, known)
     if option then
-        local ref = ref_of(refs, option)
+        local ref = refs.ref(known, option)
         if ref then
             return option, ref
         end
@@ -123,17 +76,16 @@ local function default_branch(option, refs)
         )
     end
 
-    local origin_head = refs.origin_head
-    if origin_head and refs.present[origin_head] then
-        local name = origin_head:match('^refs/remotes/origin/(.+)$')
-        if name then
-            return name, ref_of(refs, name)
+    if known.origin_head then
+        local ref = refs.ref(known, known.origin_head)
+        if ref then
+            return known.origin_head, ref
         end
     end
 
     for _, name in ipairs({ 'main', 'master' }) do
-        if refs.present['refs/heads/' .. name] then
-            return name, ref_of(refs, name)
+        if known.heads[name] then
+            return name, refs.ref(known, name)
         end
     end
 end
@@ -142,8 +94,8 @@ end
 ---forms of the command agree on it.
 ---@param branch string? Name of the default branch, `nil` when none exists.
 ---@param ref string? Ref of the default branch.
----@param current string? Name of the current branch. It is only read when a
----default branch exists, so it is missing when there is none.
+---@param current string? Name of the branch the worktree has checked out,
+---missing when HEAD is detached.
 ---@return prohub.base.Decision
 local function decide(branch, ref, current)
     if not branch then
@@ -203,45 +155,39 @@ end
 ---@param options prohub.Config The options in use.
 ---@return prohub.chain.Flow
 function M.flow(path, options)
+    local read = refs.flow(path)
     return function(run, done)
-        run(refs_command, function(out, err)
-            if not out then
+        read(run, function(known, err)
+            if not known then
                 return done(nil, err)
             end
 
-            local branch, ref =
-                default_branch(options.default_branch, parse_refs(out))
+            local branch, ref = default_branch(options.default_branch, known)
             if not branch then
                 return done(missing_base(path, decide(nil)))
             end
 
-            run(current_command, function(current, current_err)
-                if not current then
-                    return done(nil, current_err)
-                end
+            local decision = decide(branch, ref, known.branch)
+            if decision.reason then
+                return done(missing_base(path, decision))
+            end
 
-                local decision = decide(branch, ref, vim.trim(current))
-                if decision.reason then
-                    return done(missing_base(path, decision))
-                end
-
-                run(
-                    merge_base_command(decision.ref),
-                    function(commit, merge_err, code)
-                        if commit then
-                            return done(result_of(decision, vim.trim(commit)))
-                        end
-                        if code == 1 then
-                            -- Histories that do not meet make merge-base exit
-                            -- with status 1 and print nothing, which is a base
-                            -- that does not exist and not a failure.
-                            return done(result_of(decision))
-                        end
-                        log.debug('the merge-base failed: %s', merge_err)
-                        done(nil, merge_err)
+            run(
+                merge_base_command(decision.ref),
+                function(commit, merge_err, code)
+                    if commit then
+                        return done(result_of(decision, vim.trim(commit)))
                     end
-                )
-            end)
+                    if code == 1 then
+                        -- Histories that do not meet make merge-base exit with
+                        -- status 1 and print nothing, which is a base that does
+                        -- not exist and not a failure.
+                        return done(result_of(decision))
+                    end
+                    log.debug('the merge-base failed: %s', merge_err)
+                    done(nil, merge_err)
+                end
+            )
         end)
     end
 end

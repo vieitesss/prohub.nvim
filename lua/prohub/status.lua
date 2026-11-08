@@ -17,10 +17,10 @@
 --- 5. The commits the remote counterpart does not have, when git status did not
 ---    already count them.
 ---
----A worktree on a branch with an upstream takes six commands, the main
+---A worktree on a branch with an upstream takes five commands, the main
 ---checkout on the default branch fewer. A branch without an upstream asks
 ---`prohub.scope` for its remote counterpart first, which costs two more
----commands: the rule itself is stated only in `prohub.scope`.
+---commands, and the rule itself is stated only in `prohub.refs`.
 ---
 ---The cache is why `collect` is cheap to call from a timer: a cached result is
 ---delivered later on the main loop without running git, and two calls for the

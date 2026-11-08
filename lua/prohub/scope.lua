@@ -13,8 +13,8 @@
 --- - `uncommitted` needs no revision.
 ---
 ---The rule for the remote counterpart of a branch has one home, in
----`counterpart_flow`, and `prohub.status` runs that flow to count the commits
----the counterpart does not have.
+---`prohub.refs`, and `prohub.status` runs `counterpart_flow` to count the
+---commits the counterpart does not have.
 ---
 ---A scope that cannot be resolved falls back to the uncommitted changes, so a
 ---review always opens on something the user can act on. The fallback is a
@@ -37,6 +37,7 @@ local chain = require('prohub.chain')
 local config = require('prohub.config')
 local log = require('prohub.log')
 local paths = require('prohub.path')
+local refs = require('prohub.refs')
 local validate = require('prohub.validate')
 
 ---What a review needs to know about the changes it shows.
@@ -45,25 +46,6 @@ local validate = require('prohub.validate')
 ---may differ from the one that was asked for.
 ---@field base string? The revision the review shows the changes since. It is
 ---missing exactly when the scope is `uncommitted`.
-
----The refs of a worktree that the unpushed scope reads. `%(HEAD)` marks the
----branch the worktree has checked out and `%(upstream)` names its upstream, so
----one command answers every question about the unpushed changes, and a
----missing upstream is an empty field instead of a failing command.
----@type string[]
-local refs_command = {
-    'for-each-ref',
-    '--format=%(HEAD)%09%(refname)%09%(upstream)',
-    'refs/heads',
-    'refs/remotes/origin',
-}
-
----The refs of a worktree, as far as the unpushed changes are concerned.
----@class prohub.scope.Refs
----@field branch string? Name of the branch the worktree has checked out,
----missing when HEAD is detached.
----@field upstream string? Full name of the upstream of that branch.
----@field present table<string, true> Full names of the refs that exist.
 
 ---Check the arguments both forms share, then the worktree path.
 ---@param path any
@@ -81,49 +63,6 @@ local function check_inputs(path, name)
     return paths.check(path)
 end
 
----@param text string
----@return prohub.scope.Refs
-local function parse_refs(text)
-    local refs = { present = {} }
-    for _, line in ipairs(vim.split(text, '\n', { plain = true })) do
-        local marker, ref, upstream = line:match('^(.)\t([^\t]+)\t(.*)$')
-        if ref then
-            refs.present[ref] = true
-            local branch = ref:match('^refs/heads/(.+)$')
-            if branch and marker == '*' then
-                refs.branch = branch
-                if upstream ~= '' then
-                    refs.upstream = upstream
-                end
-            end
-        end
-    end
-    return refs
-end
-
----The ref whose last shared commit with `HEAD` is where the unpushed changes
----start: the configured upstream first, then `origin/<branch>`. An upstream
----whose ref is gone is skipped, so a deleted remote branch falls back the way
----a branch that was never pushed does.
----@param refs prohub.scope.Refs
----@return string? ref
-local function remote_ref(refs)
-    if refs.upstream and refs.present[refs.upstream] then
-        return refs.upstream
-    end
-    if refs.branch and refs.present['refs/remotes/origin/' .. refs.branch] then
-        return 'origin/' .. refs.branch
-    end
-end
-
----The name of a ref without the directory it is stored in, the way
----`prohub.base` names the ref of the default branch.
----@param ref string
----@return string
-local function short_ref(ref)
-    return (ref:gsub('^refs/remotes/', ''):gsub('^refs/heads/', ''))
-end
-
 ---@param ref string
 ---@return string[]
 local function merge_base_command(ref)
@@ -132,14 +71,14 @@ end
 
 ---Why the unpushed changes have no revision. Every part that was missing is
 ---named, so the user can tell which one to fix.
----@param refs prohub.scope.Refs
+---@param known prohub.Refs The refs of the worktree.
 ---@param base_reason string? Why the base of the worktree is missing.
 ---@return string
-local function unpushed_reason(refs, base_reason)
+local function unpushed_reason(known, base_reason)
     local missing = {}
-    if refs.branch then
+    if known.branch then
         table.insert(missing, 'no upstream')
-        table.insert(missing, 'no origin/' .. refs.branch)
+        table.insert(missing, 'no origin/' .. known.branch)
     else
         table.insert(missing, 'a detached HEAD')
     end
@@ -195,22 +134,24 @@ end
 ---@param options prohub.Config
 ---@return prohub.chain.Flow
 local function unpushed_flow(path, options)
+    local read = refs.flow(path)
     local resolve_base = base.flow(path, options)
     return function(run, done)
-        run(refs_command, function(out, err)
-            if not out then
+        read(run, function(known, err)
+            if not known then
                 return done(nil, err)
             end
 
-            local refs = parse_refs(out)
-            local ref = remote_ref(refs)
-            if ref then
-                run(merge_base_command(ref), function(commit, merge_err)
-                    if not commit then
-                        return done(nil, merge_err)
+            if known.counterpart then
+                run(
+                    merge_base_command(known.counterpart),
+                    function(commit, merge_err)
+                        if not commit then
+                            return done(nil, merge_err)
+                        end
+                        done({ scope = 'unpushed', base = vim.trim(commit) })
                     end
-                    done({ scope = 'unpushed', base = vim.trim(commit) })
-                end)
+                )
                 return
             end
 
@@ -227,7 +168,7 @@ local function unpushed_flow(path, options)
                     fallback(
                         'unpushed',
                         path,
-                        unpushed_reason(refs, result.reason)
+                        unpushed_reason(known, result.reason)
                     )
                 )
             end)
@@ -311,17 +252,18 @@ end
 ---@param path string Absolute path of the worktree.
 ---@return prohub.chain.Flow
 function M.counterpart_flow(path)
+    local read = refs.flow(path)
     return function(run, done)
-        run(refs_command, function(out, err)
-            if not out then
+        read(run, function(known, err)
+            if not known then
                 return done(nil, err)
             end
-            local ref = remote_ref(parse_refs(out))
-            if ref then
-                ref = short_ref(ref)
-            end
-            log.debug('the remote counterpart of %s: %s', path, ref or 'none')
-            done(ref)
+            log.debug(
+                'the remote counterpart of %s: %s',
+                path,
+                known.counterpart or 'none'
+            )
+            done(known.counterpart)
         end)
     end
 end
