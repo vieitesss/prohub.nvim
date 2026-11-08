@@ -195,6 +195,22 @@ describe('helpers.git', function()
         )
     end)
 
+    it('sets up a remote with the name the caller gives it', function()
+        local project = git.project()
+        project:commit('a.txt', 'a')
+        local upstream = project:remote('upstream')
+
+        project:git('push', '--quiet', 'upstream', 'HEAD')
+
+        assert.equals(upstream, project:git('remote', 'get-url', 'upstream'))
+        assert.equals(
+            project:git('rev-parse', 'main'),
+            project
+                :git('ls-remote', upstream, 'refs/heads/main')
+                :match('^(%x+)')
+        )
+    end)
+
     it('copies the remote of a project without starting a process', function()
         git.project():push()
         local project = git.project()

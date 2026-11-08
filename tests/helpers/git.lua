@@ -454,15 +454,19 @@ function Tree:worktree(branch)
     return new_tree(path, self.container)
 end
 
----Create a bare `origin` for the project, once, and return its path. The
+---Create a bare remote for the project, once, and return its path. The
 ---remote starts as a copy of the template, so the project starts published and
----pushing the initial commit moves no object.
+---pushing the initial commit moves no object. `name` is what the remote is
+---called, `origin` when it is missing, and every remote of a project lives in
+---the container of the project.
+---@param name? string
 ---@return string
-function Tree:remote()
-    local path = self.container .. '/origin.git'
+function Tree:remote(name)
+    name = name or 'origin'
+    local path = self.container .. '/' .. name .. '.git'
     if not vim.uv.fs_stat(path) then
         copy(template_bare().path, path)
-        self:git('remote', 'add', 'origin', path)
+        self:git('remote', 'add', name, path)
     end
 
     return path

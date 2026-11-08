@@ -67,7 +67,21 @@ describe('prohub.refs', function()
             local known, err = read(feature.path)
 
             assert.is_nil(err)
-            assert.are.equal('origin/main', known.counterpart)
+            assert.are.equal('refs/remotes/origin/main', known.counterpart)
+        end)
+
+        it('names an upstream on another remote as the counterpart', function()
+            local project = git.project()
+            local feature = project:worktree('feature')
+            project:push()
+            feature:push()
+            feature:remote('upstream')
+            feature:git('push', '--quiet', '--set-upstream', 'upstream', 'HEAD')
+
+            local known, err = read(feature.path)
+
+            assert.is_nil(err)
+            assert.are.equal('refs/remotes/upstream/feature', known.counterpart)
         end)
 
         it('falls back to origin/<branch> without an upstream', function()
@@ -79,7 +93,7 @@ describe('prohub.refs', function()
             local known, err = read(feature.path)
 
             assert.is_nil(err)
-            assert.are.equal('origin/feature', known.counterpart)
+            assert.are.equal('refs/remotes/origin/feature', known.counterpart)
         end)
 
         it('names no counterpart for a branch that was never pushed', function()
@@ -136,7 +150,10 @@ describe('prohub.refs', function()
 
             local known = assert(read(project.path))
 
-            assert.are.equal('origin/main', refs.ref(known, 'main'))
+            assert.are.equal(
+                'refs/remotes/origin/main',
+                refs.ref(known, 'main')
+            )
         end)
 
         it(
@@ -148,7 +165,10 @@ describe('prohub.refs', function()
 
                 local known = assert(read(project.path))
 
-                assert.are.equal('develop', refs.ref(known, 'develop'))
+                assert.are.equal(
+                    'refs/heads/develop',
+                    refs.ref(known, 'develop')
+                )
             end
         )
 
@@ -161,7 +181,10 @@ describe('prohub.refs', function()
 
             local known = assert(read(project.path))
 
-            assert.are.equal('origin/develop', refs.ref(known, 'develop'))
+            assert.are.equal(
+                'refs/remotes/origin/develop',
+                refs.ref(known, 'develop')
+            )
         end)
 
         it('returns nothing for a branch the project does not have', function()

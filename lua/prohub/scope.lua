@@ -9,9 +9,9 @@
 ---
 --- - `branch` is the base of the worktree, as `prohub.base` resolves it.
 --- - `unpushed` is the last commit `HEAD` shares with its remote counterpart,
----   which is the configured upstream, else `origin/<branch>`. A branch with
----   no counterpart, or with one that shares no history with `HEAD`, uses the
----   base instead.
+---   which is the configured upstream on whichever remote it lives, else
+---   `origin/<branch>`. A branch with no counterpart, or with one that shares
+---   no history with `HEAD`, uses the base instead.
 --- - `uncommitted` needs no revision.
 ---
 ---The rule for the remote counterpart of a branch has one home, in
@@ -79,7 +79,7 @@ local function unpushed_reason(known, base_reason)
     if known.counterpart then
         table.insert(
             missing,
-            known.counterpart .. ' shares no history with HEAD'
+            refs.name(known.counterpart) .. ' shares no history with HEAD'
         )
     elseif known.branch then
         table.insert(missing, 'no upstream')
@@ -263,11 +263,11 @@ function M.resolve_sync(path, name)
     return chain.run_sync(path, flow(path, name, options))
 end
 
----The steps that name the remote counterpart of the branch a worktree has
----checked out: the configured upstream when its ref exists, else
----`origin/<branch>`. A branch with no counterpart, and a detached HEAD, end
----with nothing. `prohub.status` runs this flow to count the unpushed commits,
----so the rule has one home.
+---The steps that name the full ref of the remote counterpart of the branch a
+---worktree has checked out: the configured upstream, on whichever remote it
+---lives, when its ref exists, else `origin/<branch>`. A branch with no
+---counterpart, and a detached HEAD, end with nothing. `prohub.status` runs
+---this flow to count the unpushed commits, so the rule has one home.
 ---@param path string Absolute path of the worktree.
 ---@return prohub.chain.Flow
 function M.counterpart_flow(path)
@@ -280,7 +280,7 @@ function M.counterpart_flow(path)
             log.debug(
                 'the remote counterpart of %s: %s',
                 path,
-                known.counterpart or 'none'
+                known.counterpart and refs.name(known.counterpart) or 'none'
             )
             done(known.counterpart)
         end)

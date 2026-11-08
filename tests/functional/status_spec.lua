@@ -226,6 +226,27 @@ describe('prohub.status', function()
             assert.are.equal(2, result.unpushed)
         end)
 
+        it(
+            'counts the unpushed commits against an upstream on another '
+                .. 'remote',
+            function()
+                local project, feature = feature_project()
+                project:push()
+                feature:push()
+                feature:remote('upstream')
+                feature:git('push', '--quiet', 'upstream', 'HEAD')
+                feature:git('branch', '--set-upstream-to', 'upstream/feature')
+                feature:commit('b.txt', 'b')
+                feature:commit('c.txt', 'c')
+
+                local result, err = collect(feature.path)
+
+                assert.is_nil(err)
+                assert.is_nil(result.reason)
+                assert.are.equal(2, result.unpushed)
+            end
+        )
+
         it('counts the unpushed commits against origin/<branch>', function()
             local _, feature = feature_project()
             feature:push()

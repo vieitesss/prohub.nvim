@@ -154,6 +154,40 @@ describe('prohub.scope', function()
                 assert.are.same({}, calls)
             end)
 
+            it(
+                'uses an upstream on another remote for the unpushed scope',
+                function()
+                    local project = git.project()
+                    local feature = project:worktree('feature')
+                    project:push()
+                    feature:commit('a.txt', 'a', 'a change on the feature')
+                    feature:push()
+                    feature:remote('upstream')
+                    feature:git('push', '--quiet', 'upstream', 'HEAD')
+                    feature:commit('b.txt', 'b', 'another change')
+                    feature:git('push', '--quiet', 'origin', 'HEAD')
+                    feature:git(
+                        'branch',
+                        '--set-upstream-to',
+                        'upstream/feature'
+                    )
+                    feature:commit('c.txt', 'c', 'a third change')
+                    local calls = capture()
+
+                    local result, err = resolve(feature.path, 'unpushed')
+
+                    assert.is_nil(err)
+                    assert.are.same({
+                        scope = 'unpushed',
+                        base = feature:git(
+                            'rev-parse',
+                            'refs/remotes/upstream/feature'
+                        ),
+                    }, result)
+                    assert.are.same({}, calls)
+                end
+            )
+
             it('uses origin/<branch> when there is no upstream', function()
                 local project = git.project()
                 local feature = project:worktree('feature')
@@ -169,6 +203,28 @@ describe('prohub.scope', function()
                 assert.are.same({
                     scope = 'unpushed',
                     base = feature:git('rev-parse', 'origin/feature'),
+                }, result)
+                assert.are.same({}, calls)
+            end)
+
+            it('ignores a tag of the name of the remote counterpart', function()
+                local project = git.project()
+                local feature = project:worktree('feature')
+                feature:commit('a.txt', 'a', 'a change on the feature')
+                feature:push()
+                feature:commit('b.txt', 'b', 'another change')
+                feature:git('tag', 'origin/feature')
+                local calls = capture()
+
+                local result, err = resolve(feature.path, 'unpushed')
+
+                assert.is_nil(err)
+                assert.are.same({
+                    scope = 'unpushed',
+                    base = feature:git(
+                        'rev-parse',
+                        'refs/remotes/origin/feature'
+                    ),
                 }, result)
                 assert.are.same({}, calls)
             end)
@@ -360,7 +416,20 @@ describe('prohub.scope', function()
             local ref, err = counterpart(feature.path)
 
             assert.is_nil(err)
-            assert.are.equal('origin/main', ref)
+            assert.are.equal('refs/remotes/origin/main', ref)
+        end)
+
+        it('names an upstream on another remote', function()
+            local project = git.project()
+            local feature = project:worktree('feature')
+            feature:push()
+            feature:remote('upstream')
+            feature:git('push', '--quiet', '--set-upstream', 'upstream', 'HEAD')
+
+            local ref, err = counterpart(feature.path)
+
+            assert.is_nil(err)
+            assert.are.equal('refs/remotes/upstream/feature', ref)
         end)
 
         it('falls back to origin/<branch> without an upstream', function()
@@ -372,7 +441,7 @@ describe('prohub.scope', function()
             local ref, err = counterpart(feature.path)
 
             assert.is_nil(err)
-            assert.are.equal('origin/feature', ref)
+            assert.are.equal('refs/remotes/origin/feature', ref)
         end)
 
         it('names nothing when there is no remote counterpart', function()

@@ -6,8 +6,10 @@
 ---The default branch is resolved in this order: the `default_branch` option,
 ---`origin/HEAD`, a local `main` and then a local `master`. Once a name is
 ---known, the `origin/<name>` ref is used when it exists and the local ref
----otherwise, because the remote ref is what the rest of the project shares. An
----option that names no branch falls through to the rest of the order.
+---otherwise, because the remote ref is what the rest of the project shares.
+---The result is a full ref, such as `refs/remotes/origin/main` or
+---`refs/heads/main`, so a tag of the same name never stands in for the branch.
+---An option that names no branch falls through to the rest of the order.
 ---
 ---The refs of the project and the branch the worktree has checked out come from
 ---one read of `prohub.refs`, so a resolution reads git once before the
@@ -46,8 +48,8 @@ local validate = require('prohub.validate')
 ---project has no default branch.
 ---@class prohub.Base
 ---@field branch string? Name of the default branch, without a remote prefix.
----@field ref string? Ref of the default branch that was used, such as
----`origin/main` or `main`.
+---@field ref string? Full ref of the default branch that was used, such as
+---`refs/remotes/origin/main` or `refs/heads/main`.
 ---@field base string? The base commit, missing when no base exists.
 ---@field reason string? Why no base exists: `no default branch`,
 ---`on the default branch` or `no common history`.
@@ -55,7 +57,7 @@ local validate = require('prohub.validate')
 ---The decision of the resolution before the merge-base is known.
 ---@class prohub.base.Decision
 ---@field branch string? Name of the default branch.
----@field ref string? Ref of the default branch.
+---@field ref string? Full ref of the default branch.
 ---@field reason string? Why no base can exist.
 
 ---The name and the ref of the default branch, in the order the option, then

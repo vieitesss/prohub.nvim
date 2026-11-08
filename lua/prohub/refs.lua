@@ -1,17 +1,19 @@
----The refs of a worktree: the local branches, the remote-tracking refs of
----`origin`, the branch the worktree has checked out and its remote counterpart.
+---The refs of a worktree: the local branches, the remote-tracking refs of the
+---remotes, the branch the worktree has checked out and its remote counterpart.
 ---One `for-each-ref` answers every question about them, so a module that needs
 ---a ref does not run a second command for the branch and does not restate how a
 ---ref is named.
 ---
----The names in `prohub.Refs` are branch names, without the directory a ref is
----stored in, so a caller never builds `refs/heads/...` itself. `ref` answers
----the one question that is about a name: which ref of this project stands for
----that branch, the one of `origin` when it exists and the local one otherwise.
----The remote counterpart of the checked-out branch is a fact of the read, in
----`counterpart`, because it needs the refs the read already has.
+---Every ref this module answers with is a full ref, such as `refs/heads/main`
+---or `refs/remotes/origin/main`, so a tag or a ref of another kind with the
+---same name never stands in for it. A caller never builds `refs/heads/...`
+---itself. `ref` answers the one question that is about a name: which ref of
+---this project stands for that branch, the one of `origin` when it exists and
+---the local one otherwise. The remote counterpart of the checked-out branch is
+---a fact of the read, in `counterpart`, because it needs the refs the read
+---already has.
 ---
----The read covers `refs/heads` and `refs/remotes/origin` only: those hold every
+---The read covers `refs/heads` and `refs/remotes` only: those hold every
 ---candidate for a default branch and for a counterpart.
 ---
 ---    local refs = require('prohub.refs')
@@ -29,27 +31,23 @@ local M = {}
 ---@field origin table<string, true> Names of the branches `origin` has,
 ---without its `HEAD`.
 ---@field origin_head string? Name of the branch `origin/HEAD` points at.
----@field counterpart string? Remote counterpart of `branch`: its upstream when
----its ref exists, else `origin/<branch>`. It is missing when the branch has
+---@field counterpart string? Full ref of the remote counterpart of `branch`:
+---its configured upstream, on whichever remote it lives, when that ref exists,
+---else `refs/remotes/origin/<branch>`. It is missing when the branch has
 ---none, and when HEAD is detached.
 
 ---One command answers every question about the refs. `%(HEAD)` marks the branch
 ---the worktree has checked out, and `%(symref)` names the branch `origin/HEAD`
----points at, so the current branch needs no command of its own.
+---points at, so the current branch needs no command of its own. The upstream
+---is the full ref the branch is configured to follow, whether or not that ref
+---exists, and the read of `refs/remotes` is what tells the two apart.
 ---@type string[]
 local command = {
     'for-each-ref',
     '--format=%(HEAD)%09%(refname)%09%(symref)%09%(upstream)',
     'refs/heads',
-    'refs/remotes/origin',
+    'refs/remotes',
 }
-
----The name of a ref without the directory it is stored in.
----@param ref string
----@return string
-local function short(ref)
-    return (ref:gsub('^refs/remotes/', ''):gsub('^refs/heads/', ''))
-end
 
 ---Read the branch a line names, and remember the refs the counterpart rule
 ---needs. The upstream is kept aside because whether it still exists is only
@@ -104,9 +102,9 @@ local function parse(text)
     end
 
     if upstream and present[upstream] then
-        known.counterpart = short(upstream)
+        known.counterpart = upstream
     elseif known.branch and known.origin[known.branch] then
-        known.counterpart = 'origin/' .. known.branch
+        known.counterpart = 'refs/remotes/origin/' .. known.branch
     end
     return known
 end
@@ -129,14 +127,22 @@ end
 ---ref is what the rest of the project shares, and the local ref otherwise.
 ---@param known prohub.Refs The refs of the worktree.
 ---@param name string Name of the branch, without a remote prefix.
----@return string? ref
+---@return string? ref Full ref of the branch.
 function M.ref(known, name)
     if known.origin[name] then
-        return 'origin/' .. name
+        return 'refs/remotes/origin/' .. name
     end
     if known.heads[name] then
-        return name
+        return 'refs/heads/' .. name
     end
+end
+
+---The name of a ref, without the directory it is stored in, which is what a
+---message shows.
+---@param ref string
+---@return string
+function M.name(ref)
+    return (ref:gsub('^refs/remotes/', ''):gsub('^refs/heads/', ''))
 end
 
 return M

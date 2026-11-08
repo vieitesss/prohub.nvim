@@ -73,7 +73,7 @@ describe('prohub.base', function()
                 assert.is_nil(err)
                 assert.are.same({
                     branch = 'main',
-                    ref = 'main',
+                    ref = 'refs/heads/main',
                     base = project:git('rev-parse', 'main'),
                 }, result)
             end)
@@ -89,7 +89,7 @@ describe('prohub.base', function()
                 assert.is_nil(err)
                 assert.are.same({
                     branch = 'master',
-                    ref = 'master',
+                    ref = 'refs/heads/master',
                     base = project:git('rev-parse', 'master'),
                 }, result)
             end)
@@ -108,7 +108,7 @@ describe('prohub.base', function()
                 assert.is_nil(err)
                 assert.are.same({
                     branch = 'trunk',
-                    ref = 'origin/trunk',
+                    ref = 'refs/remotes/origin/trunk',
                     base = project:git('rev-parse', 'trunk'),
                 }, result)
             end)
@@ -126,7 +126,7 @@ describe('prohub.base', function()
                 assert.is_nil(err)
                 assert.are.same({
                     branch = 'develop',
-                    ref = 'develop',
+                    ref = 'refs/heads/develop',
                     base = project:git('rev-parse', 'develop'),
                 }, result)
             end)
@@ -142,8 +142,22 @@ describe('prohub.base', function()
                 assert.is_nil(err)
                 assert.are.same({
                     branch = 'main',
-                    ref = 'origin/main',
+                    ref = 'refs/remotes/origin/main',
                     base = project:git('rev-parse', 'origin/main'),
+                }, result)
+            end)
+
+            it('ignores a tag of the name of the default branch', function()
+                local project, feature = feature_project()
+                feature:git('tag', 'main')
+
+                local result, err = resolve(feature.path)
+
+                assert.is_nil(err)
+                assert.are.same({
+                    branch = 'main',
+                    ref = 'refs/heads/main',
+                    base = project:git('rev-parse', 'refs/heads/main'),
                 }, result)
             end)
 
@@ -169,7 +183,7 @@ describe('prohub.base', function()
                 assert.is_nil(err)
                 assert.are.same({
                     branch = 'main',
-                    ref = 'origin/main',
+                    ref = 'refs/remotes/origin/main',
                     reason = 'on the default branch',
                 }, result)
             end)
@@ -185,7 +199,7 @@ describe('prohub.base', function()
                 assert.is_nil(err)
                 assert.are.same({
                     branch = 'main',
-                    ref = 'main',
+                    ref = 'refs/heads/main',
                     reason = 'no common history',
                 }, result)
             end)
@@ -200,7 +214,7 @@ describe('prohub.base', function()
                 assert.is_nil(err)
                 assert.are.same({
                     branch = 'main',
-                    ref = 'main',
+                    ref = 'refs/heads/main',
                     base = bare:git('rev-parse', 'main'),
                 }, result)
             end)
