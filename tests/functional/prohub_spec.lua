@@ -16,15 +16,14 @@ describe('prohub', function()
         assert.is_function(prohub.review)
     end)
 
-    it('returns an error instead of throwing while unimplemented', function()
-        local ok, err = prohub.open({ cwd = dir })
-        assert.is_nil(ok)
-        assert.is_string(err)
-
-        ok, err = prohub.review(dir)
-        assert.is_nil(ok)
-        assert.is_string(err)
-    end)
+    it(
+        'returns an error instead of throwing while the hub is unimplemented',
+        function()
+            local ok, err = prohub.open({ cwd = dir })
+            assert.is_nil(ok)
+            assert.is_string(err)
+        end
+    )
 
     it('returns an error instead of throwing on invalid arguments', function()
         local calls = {

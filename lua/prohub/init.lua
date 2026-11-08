@@ -1,6 +1,7 @@
 local M = {}
 
 local config = require('prohub.config')
+local review = require('prohub.review')
 local validate = require('prohub.validate')
 
 ---@alias prohub.Scope 'branch'|'unpushed'|'uncommitted'
@@ -34,7 +35,8 @@ function M.open(opts)
     return nil, 'prohub: the hub is not implemented yet'
 end
 
----Open a review of one worktree.
+---Open a review of one worktree in its own tabpage, or go to the review of
+---that worktree that is already open.
 ---@param path string Path of the worktree to review.
 ---@param opts? prohub.ReviewOpts
 ---@return true|nil ok
@@ -48,7 +50,7 @@ function M.review(path, opts)
         return nil, err
     end
 
-    return nil, 'prohub: reviews are not implemented yet'
+    return review.open(path, opts)
 end
 
 return M
