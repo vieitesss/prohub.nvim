@@ -59,7 +59,7 @@ local namespace = vim.api.nvim_create_namespace('prohub_hub')
 ---@class prohub.hub.Hub
 ---@field key string Identity of the hub.
 ---@field buffer integer The buffer that holds the rows.
----@field tabpage integer The tabpage the hub lives in.
+---@field tabpage? integer The tabpage the hub lives in, while it is open.
 ---@field paths table<integer, string> The worktree of each line of the buffer.
 ---@field missing? table<string, true> The worktrees git reports as missing.
 ---@field worktrees? prohub.Worktree[] The worktrees the last render listed.
@@ -465,7 +465,8 @@ end
 ---@return true|nil ok
 ---@return string? err
 rerender = function(hub, automatic)
-    if not hub.dir then
+    local dir = hub.dir
+    if not dir then
         return nil, 'prohub: the hub has no directory to render again'
     end
     if (hub.rendering or 0) > 0 then
@@ -486,7 +487,7 @@ rerender = function(hub, automatic)
     -- every status have answered, so nothing else starts meanwhile.
     hub.rendering = 1
     local buffer = hub.buffer
-    local key, dir = hub.key, hub.dir
+    local key = hub.key
 
     local function settle()
         hub.rendering = 0

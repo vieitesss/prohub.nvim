@@ -24,9 +24,9 @@ local validate = require('prohub.validate')
 
 ---What the hub lets the keys do.
 ---@class prohub.hub.KeymapActions
----@field cursor fun(): string? path, boolean missing The worktree of the row
----under the cursor, missing when the row holds none, and whether git reports
----that worktree as missing.
+---@field cursor fun(): (string?, boolean) The worktree of the row under the
+---cursor, which is nil when the row holds none, and whether git reports that
+---worktree as missing.
 ---@field refresh fun(): true|nil ok, string? err Render the hub again.
 ---@field close fun(): true|nil ok, string? err Close the hub.
 

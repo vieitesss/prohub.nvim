@@ -32,7 +32,7 @@ local validate = require('prohub.validate')
 ---@field refresh fun(): true|nil ok, string? err Render the hub again.
 ---@field interval integer Milliseconds between two renders of the hub.
 ---@field group integer The augroup of the buffer.
----@field timer? userdata The timer, while it runs.
+---@field timer? any The timer, while it runs.
 
 ---The states this module follows, by buffer.
 ---@type table<integer, prohub.hub.refresh.State>

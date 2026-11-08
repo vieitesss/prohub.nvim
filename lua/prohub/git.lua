@@ -26,6 +26,14 @@ local log = require('prohub.log')
 local paths = require('prohub.path')
 local validate = require('prohub.validate')
 
+---The result of a git command, which is what `vim.system` completes with: the
+---fields prohub reads from it, and no others.
+---@class prohub.git.Result
+---@field code integer Exit status of the command.
+---@field signal integer Signal that ended the command, zero when it exited.
+---@field stdout? string Standard output of the command.
+---@field stderr? string Standard error of the command.
+
 ---The variables that point git at a project other than the worktree it is
 ---given. Every command runs without them, so an editor started from a git hook
 ---or from a script still reads the project of the worktree path.
@@ -95,7 +103,7 @@ end
 ---Turn what `vim.system` returned into the result of the helper.
 ---@param path string
 ---@param command string
----@param result vim.SystemCompleted
+---@param result prohub.git.Result
 ---@return string? out
 ---@return string? err
 ---@return integer code The exit status of a command that ran.
