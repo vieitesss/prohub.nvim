@@ -13,4 +13,20 @@ function M.check(spec)
     return true
 end
 
+---Whether a value is a list of strings, the shape prohub takes as a list of
+---arguments or of paths. It is a predicate for `check`.
+---@param value any
+---@return boolean
+function M.is_string_list(value)
+    if not vim.islist(value) then
+        return false
+    end
+    for _, item in ipairs(value) do
+        if type(item) ~= 'string' then
+            return false
+        end
+    end
+    return true
+end
+
 return M
