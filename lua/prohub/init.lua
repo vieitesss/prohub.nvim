@@ -1,6 +1,7 @@
 local M = {}
 
 local config = require('prohub.config')
+local hub = require('prohub.hub')
 local review = require('prohub.review')
 local validate = require('prohub.validate')
 
@@ -27,12 +28,7 @@ end
 ---@return true|nil ok
 ---@return string? err
 function M.open(opts)
-    local ok, err = validate.check({ opts = { opts, 'table', true } })
-    if not ok then
-        return nil, err
-    end
-
-    return nil, 'prohub: the hub is not implemented yet'
+    return hub.open(opts)
 end
 
 ---Open a review of one worktree in its own tabpage, or go to the review of

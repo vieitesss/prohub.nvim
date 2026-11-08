@@ -9,14 +9,11 @@
 ---directory.
 ---
 ---When a review closes, the editor returns to the tabpage it was opened from,
----or to the hub tabpage when that one is gone. The hub does not exist yet, and
----this module does not build it: it finds the hub through a tab variable that
----the hub is expected to set when it renders itself into its own tabpage.
+---or to the hub tabpage when that one is gone. This module does not build the
+---hub: it finds it through a tab variable that the hub sets on its own
+---tabpage.
 ---
 ---    vim.t[tabpage].prohub_hub = true
----
----Until the hub sets that variable, a close with no tabpage to return to
----leaves the editor where it is.
 ---
 ---    local review = require('prohub.review')
 ---
