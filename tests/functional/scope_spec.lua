@@ -1,7 +1,8 @@
 local git = require('helpers.git')
 local log = require('prohub.log')
 
----The module under test.
+---The modules under test.
+local chain = require('prohub.chain')
 local scope = require('prohub.scope')
 
 describe('prohub.scope', function()
@@ -276,6 +277,72 @@ describe('prohub.scope', function()
 
             assert.is_nil(ok)
             assert.is_truthy(err:find('scope', 1, true))
+        end)
+    end)
+
+    describe('counterpart_flow', function()
+        ---Run the flow and wait for git.
+        ---@param path string
+        ---@return string? ref
+        ---@return string? err
+        local function counterpart(path)
+            return chain.run_sync(path, scope.counterpart_flow(path))
+        end
+
+        it('names the configured upstream', function()
+            local project = git.project()
+            local feature = project:worktree('feature')
+            project:push()
+            feature:push()
+            feature:git('branch', '--set-upstream-to', 'origin/main')
+
+            local ref, err = counterpart(feature.path)
+
+            assert.is_nil(err)
+            assert.are.equal('origin/main', ref)
+        end)
+
+        it('falls back to origin/<branch> without an upstream', function()
+            local project = git.project()
+            local feature = project:worktree('feature')
+            feature:push()
+            feature:git('branch', '--unset-upstream')
+
+            local ref, err = counterpart(feature.path)
+
+            assert.is_nil(err)
+            assert.are.equal('origin/feature', ref)
+        end)
+
+        it('names nothing when there is no remote counterpart', function()
+            local project = git.project()
+
+            local ref, err = counterpart(project.path)
+
+            assert.is_nil(err)
+            assert.is_nil(ref)
+        end)
+
+        it('names nothing for a detached HEAD', function()
+            local project = git.project()
+            project:push()
+            project:detach()
+
+            local ref, err = counterpart(project.path)
+
+            assert.is_nil(err)
+            assert.is_nil(ref)
+        end)
+
+        it('returns an error outside a git project', function()
+            local plain = vim.fn.tempname()
+            vim.fn.mkdir(plain, 'p')
+
+            local ref, err = counterpart(plain)
+            vim.fn.delete(plain, 'rf')
+
+            assert.is_nil(ref)
+            assert.is_truthy(err:find('not a git repository', 1, true))
         end)
     end)
 

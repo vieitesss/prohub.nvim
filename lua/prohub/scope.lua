@@ -12,6 +12,10 @@
 ---   which is the configured upstream, else `origin/<branch>`, else the base.
 --- - `uncommitted` needs no revision.
 ---
+---The rule for the remote counterpart of a branch has one home, in
+---`counterpart_flow`, and `prohub.status` runs that flow to count the commits
+---the counterpart does not have.
+---
 ---A scope that cannot be resolved falls back to the uncommitted changes, so a
 ---review always opens on something the user can act on. The fallback is a
 ---normal result, not an error: it names the scope that was used and it tells
@@ -110,6 +114,14 @@ local function remote_ref(refs)
     if refs.branch and refs.present['refs/remotes/origin/' .. refs.branch] then
         return 'origin/' .. refs.branch
     end
+end
+
+---The name of a ref without the directory it is stored in, the way
+---`prohub.base` names the ref of the default branch.
+---@param ref string
+---@return string
+local function short_ref(ref)
+    return (ref:gsub('^refs/remotes/', ''):gsub('^refs/heads/', ''))
 end
 
 ---@param ref string
@@ -289,6 +301,29 @@ function M.resolve_sync(path, name)
     end
 
     return chain.run_sync(path, flow(path, name, options))
+end
+
+---The steps that name the remote counterpart of the branch a worktree has
+---checked out: the configured upstream when its ref exists, else
+---`origin/<branch>`. A branch with no counterpart, and a detached HEAD, end
+---with nothing. `prohub.status` runs this flow to count the unpushed commits,
+---so the rule has one home.
+---@param path string Absolute path of the worktree.
+---@return prohub.chain.Flow
+function M.counterpart_flow(path)
+    return function(run, done)
+        run(refs_command, function(out, err)
+            if not out then
+                return done(nil, err)
+            end
+            local ref = remote_ref(parse_refs(out))
+            if ref then
+                ref = short_ref(ref)
+            end
+            log.debug('the remote counterpart of %s: %s', path, ref or 'none')
+            done(ref)
+        end)
+    end
 end
 
 return M
