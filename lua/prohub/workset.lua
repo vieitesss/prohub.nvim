@@ -4,55 +4,21 @@
 ---
 ---    local workset = require('prohub.workset')
 ---
----    local key, entries = workset.match(dir, options.worksets)
+---    local match = workset.match(dir, options.worksets)
 ---    workset.list(dir, function(worktrees, err) end)
 ---
 ---Both functions report an expected failure as `nil` and an error instead of
----throwing, and a directory that matches no workset is not a failure.
+---throwing, and a directory that matches no workset is not a failure. Every
+---asynchronous callback prohub delivers runs later on the main loop, never
+---inline with the call that started the work.
 ---@class prohub.workset
 local M = {}
 
 local config = require('prohub.config')
 local log = require('prohub.log')
+local paths = require('prohub.path')
 local validate = require('prohub.validate')
 local worktree = require('prohub.worktree')
-
----@param value any
----@return boolean
-local function is_string_list(value)
-    if not vim.islist(value) then
-        return false
-    end
-    for _, item in ipairs(value) do
-        if type(item) ~= 'string' then
-            return false
-        end
-    end
-    return true
-end
-
----@param path string
----@return boolean
-local function is_absolute(path)
-    if vim.fn.has('win32') == 1 then
-        return path:match('^%a:/') ~= nil or path:match('^//') ~= nil
-    end
-    return path:match('^/') ~= nil
-end
-
----Expand `~`, make a path absolute, resolve the symbolic links it may contain
----and drop a trailing slash. The file system is only read for a path that
----exists, so a path that is about to be reported can still be normalized.
----@param path string
----@param base string Directory a relative path is resolved against.
----@return string
-local function normalize(path, base)
-    local result = vim.fs.normalize(path)
-    if not is_absolute(result) then
-        result = vim.fs.normalize(vim.fs.joinpath(base, result))
-    end
-    return vim.uv.fs_realpath(result) or result
-end
 
 ---Whether `key` is `dir` or a directory that contains it.
 ---@param key string
@@ -69,7 +35,7 @@ end
 ---@param entries string[]|fun(): string[]
 ---@param key string The key of the workset, as it was configured.
 ---@param base string The normalized key, relative entries are resolved against.
----@return string[]|nil paths
+---@return string[]|nil resolved
 ---@return string? err
 local function resolve(entries, key, base)
     if type(entries) == 'function' then
@@ -78,19 +44,19 @@ local function resolve(entries, key, base)
             return nil,
                 ('prohub: worksets.%s: %s'):format(key, tostring(result))
         end
-        if not is_string_list(result) then
+        if not validate.is_string_list(result) then
             return nil,
                 ('prohub: worksets.%s: expected a list of strings'):format(key)
         end
         entries = result
-    elseif not is_string_list(entries) then
+    elseif not validate.is_string_list(entries) then
         return nil,
             ('prohub: worksets.%s: expected a list of strings'):format(key)
     end
 
-    local paths, seen = {}, {}
+    local resolved, seen = {}, {}
     for _, entry in ipairs(entries) do
-        local pattern = normalize(entry, base)
+        local pattern = paths.normalize(entry, base)
         local matches = vim.fn.glob(pattern, false, true)
         if #matches == 0 then
             -- A glob that matches nothing, or a plain path that does not exist,
@@ -98,18 +64,22 @@ local function resolve(entries, key, base)
             matches = { pattern }
         end
         for _, match in ipairs(matches) do
-            local path = normalize(match, base)
-            if not seen[path] then
-                seen[path] = true
-                table.insert(paths, path)
+            local found = paths.normalize(match, base)
+            if not seen[found] then
+                seen[found] = true
+                table.insert(resolved, found)
             end
         end
     end
-    return paths
+    return resolved
 end
 
----The key of the nearest ancestor of `dir`, and the entries of that workset as
----absolute paths.
+---One workset that contains the directory the hub is opened from.
+---@class prohub.workset.Match
+---@field key string The key of the workset, as it was configured.
+---@field entries string[] The entries of the workset as absolute paths.
+
+---The nearest workset of `dir`.
 ---
 ---Keys are directories that contain `dir`, or that are `dir` itself. The
 ---deepest key wins, so a workset of a subdirectory hides the workset of the
@@ -120,9 +90,8 @@ end
 ---@param dir string Directory the hub is opened from.
 ---@param worksets table<string, string[]|fun(): string[]> The option of the
 ---same name.
----@return string? key The key of the nearest workset, as it was configured.
----@return string[]|string? entries The entries as absolute paths, or the error
----of a function that failed.
+---@return prohub.workset.Match? match Missing when no workset contains `dir`.
+---@return string? err
 function M.match(dir, worksets)
     local ok, err = validate.check({
         dir = { dir, 'string' },
@@ -132,7 +101,8 @@ function M.match(dir, worksets)
         return nil, err
     end
 
-    local target = normalize(dir, vim.fn.getcwd())
+    local cwd = vim.fn.getcwd()
+    local target = paths.normalize(dir, cwd)
     local nearest, base, deepest
     for _, key in ipairs(vim.tbl_keys(worksets)) do
         if type(key) ~= 'string' then
@@ -141,7 +111,7 @@ function M.match(dir, worksets)
                     type(key)
                 )
         end
-        local normalized = normalize(key, vim.fn.getcwd())
+        local normalized = paths.normalize(key, cwd)
         if contains(normalized, target) and #normalized > (deepest or -1) then
             nearest, base, deepest = key, normalized, #normalized
         end
@@ -150,25 +120,22 @@ function M.match(dir, worksets)
         return nil
     end
 
-    local paths, resolve_err = resolve(worksets[nearest], nearest, base)
-    if not paths then
+    local resolved, resolve_err = resolve(worksets[nearest], nearest, base)
+    if not resolved then
         return nil, resolve_err
     end
-    return nearest, paths
+    return { key = nearest, entries = resolved }
 end
 
----Deliver a result of `list` on the main loop, where the hub can use the API.
+---Deliver a result of `list` later on the main loop, where the hub can use
+---the API.
 ---@param callback fun(worktrees: prohub.Worktree[]?, err: string?)
 ---@param worktrees prohub.Worktree[]?
 ---@param err string?
 local function deliver(callback, worktrees, err)
-    if vim.in_fast_event() then
-        vim.schedule(function()
-            callback(worktrees, err)
-        end)
-    else
+    vim.schedule(function()
         callback(worktrees, err)
-    end
+    end)
 end
 
 ---The record of the worktree that `path` is, or `nil` when `path` is not a
@@ -194,11 +161,10 @@ local function from_workset(dir, callback)
         return deliver(callback, nil, err)
     end
 
-    local matched, entries = M.match(dir, options.worksets)
-    if not matched then
-        -- `match` returns its error in place of the entries.
-        if entries then
-            return deliver(callback, nil, entries)
+    local match, match_err = M.match(dir, options.worksets)
+    if not match then
+        if match_err then
+            return deliver(callback, nil, match_err)
         end
         vim.notify(
             ('prohub: no workset matches %s'):format(dir),
@@ -207,18 +173,18 @@ local function from_workset(dir, callback)
         return deliver(callback, {})
     end
 
-    local paths = {}
-    for _, entry in ipairs(entries) do
+    local directories = {}
+    for _, entry in ipairs(match.entries) do
         local stat = vim.uv.fs_stat(entry)
         if stat and stat.type == 'directory' then
-            table.insert(paths, entry)
+            table.insert(directories, entry)
         else
             log.warn('prohub: skipping %s: not a git worktree', entry)
         end
     end
 
     local records = {}
-    local remaining = #paths
+    local remaining = #directories
     local function finish(index, record, warning)
         records[index] = record
         if warning then
@@ -229,7 +195,7 @@ local function from_workset(dir, callback)
             return
         end
         local worktrees = {}
-        for i = 1, #paths do
+        for i = 1, #directories do
             if records[i] then
                 table.insert(worktrees, records[i])
             end
@@ -244,7 +210,7 @@ local function from_workset(dir, callback)
     -- Every entry is listed at the same time, so a workset of many worktrees
     -- costs one git command per entry and not a chain of them. The records keep
     -- the order of the workset.
-    for index, entry in ipairs(paths) do
+    for index, entry in ipairs(directories) do
         local ok, start_err = worktree.list(entry, function(worktrees, list_err)
             local record = pick(worktrees, entry)
             local warning
@@ -273,7 +239,7 @@ end
 ---
 ---Return `nil` and an error for invalid arguments or a directory that does not
 ---exist, without calling the callback. Otherwise the callback receives the
----worktrees, or `nil` and an error, on the main loop. A directory outside
+---worktrees, or `nil` and an error, later on the main loop. A directory outside
 ---every workset notifies the user with a warning and delivers no worktree.
 ---@param dir string Directory the hub is opened from.
 ---@param callback fun(worktrees: prohub.Worktree[]?, err: string?)
@@ -288,21 +254,18 @@ function M.list(dir, callback)
         return nil, err
     end
 
-    local path = normalize(dir, vim.fn.getcwd())
-    local stat = vim.uv.fs_stat(path)
-    if not stat then
-        return nil, ('prohub: the path does not exist: %s'):format(dir)
-    end
-    if stat.type ~= 'directory' then
-        return nil, ('prohub: the path is not a directory: %s'):format(dir)
+    local target = paths.normalize(dir, vim.fn.getcwd())
+    local ok_path, path_err = paths.check(target)
+    if not ok_path then
+        return nil, path_err
     end
 
-    return worktree.list(path, function(worktrees, list_err)
+    return worktree.list(target, function(worktrees, list_err)
         if worktrees then
             return deliver(callback, worktrees)
         end
-        log.debug('prohub: %s is not a git repository: %s', path, list_err)
-        from_workset(path, callback)
+        log.debug('prohub: %s is not a git repository: %s', target, list_err)
+        from_workset(target, callback)
     end)
 end
 

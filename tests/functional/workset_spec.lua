@@ -51,11 +51,10 @@ describe('prohub.workset', function()
             local project = git.project()
             local key = dir()
 
-            local matched, entries =
-                workset.match(key, { [key] = { project.path } })
+            local match = workset.match(key, { [key] = { project.path } })
 
-            assert.are.equal(key, matched)
-            assert.are.same({ project.path }, entries)
+            assert.are.equal(key, match.key)
+            assert.are.same({ project.path }, match.entries)
         end)
 
         it('matches the nearest ancestor of the directory', function()
@@ -64,13 +63,13 @@ describe('prohub.workset', function()
             local inner = dir('inner', outer)
             local deep = dir('deep', inner)
 
-            local matched, entries = workset.match(deep, {
+            local match = workset.match(deep, {
                 [outer] = { project.path },
                 [inner] = { project.path },
             })
 
-            assert.are.equal(inner, matched)
-            assert.are.same({ project.path }, entries)
+            assert.are.equal(inner, match.key)
+            assert.are.same({ project.path }, match.entries)
         end)
 
         it('returns no key when no workset contains the directory', function()
@@ -79,12 +78,12 @@ describe('prohub.workset', function()
             local key = dir('hub', root)
             local sibling = dir('hub-mate', root)
 
-            local matched, entries = workset.match(sibling, {
+            local match, err = workset.match(sibling, {
                 [key] = { project.path },
             })
 
-            assert.is_nil(matched)
-            assert.is_nil(entries)
+            assert.is_nil(match)
+            assert.is_nil(err)
         end)
 
         it('expands globs in the order of the workset', function()
@@ -93,14 +92,17 @@ describe('prohub.workset', function()
             local fix = project:worktree('fix')
             local key = dir()
 
-            local _, entries = workset.match(key, {
+            local match = workset.match(key, {
                 [key] = {
                     project.container .. '/*',
                     project.path,
                 },
             })
 
-            assert.are.same({ feature.path, fix.path, project.path }, entries)
+            assert.are.same(
+                { feature.path, fix.path, project.path },
+                match.entries
+            )
         end)
 
         it('takes the paths a function returns', function()
@@ -108,13 +110,13 @@ describe('prohub.workset', function()
             local feature = project:worktree('feature')
             local key = dir()
 
-            local _, entries = workset.match(key, {
+            local match = workset.match(key, {
                 [key] = function()
                     return { feature.path, project.path }
                 end,
             })
 
-            assert.are.same({ feature.path, project.path }, entries)
+            assert.are.same({ feature.path, project.path }, match.entries)
         end)
 
         it('only calls the function of the nearest workset', function()
@@ -123,26 +125,26 @@ describe('prohub.workset', function()
             local inner = dir('inner', outer)
             local deep = dir('deep', inner)
 
-            local _, entries = workset.match(deep, {
+            local match = workset.match(deep, {
                 [outer] = function()
                     error('the wrong function was called')
                 end,
                 [inner] = { project.path },
             })
 
-            assert.are.same({ project.path }, entries)
+            assert.are.same({ project.path }, match.entries)
         end)
 
         it('names the workset of a function that fails', function()
             local key = dir()
 
-            local matched, err = workset.match(key, {
+            local match, err = workset.match(key, {
                 [key] = function()
                     error('no list for you')
                 end,
             })
 
-            assert.is_nil(matched)
+            assert.is_nil(match)
             assert.is_truthy(err:find('worksets.' .. key, 1, true))
             assert.is_truthy(err:find('no list for you', 1, true))
         end)
@@ -150,13 +152,13 @@ describe('prohub.workset', function()
         it('names the workset of a function that returns no list', function()
             local key = dir()
 
-            local matched, err = workset.match(key, {
+            local match, err = workset.match(key, {
                 [key] = function()
                     return 'not a list'
                 end,
             })
 
-            assert.is_nil(matched)
+            assert.is_nil(match)
             assert.is_truthy(err:find('worksets.' .. key, 1, true))
         end)
 
@@ -188,12 +190,12 @@ describe('prohub.workset', function()
             local root = dir()
             local deep = dir('deep', root)
 
-            local matched, entries = workset.match(deep .. '/', {
+            local match = workset.match(deep .. '/', {
                 [root .. '/'] = { project.path },
             })
 
-            assert.are.equal(root .. '/', matched)
-            assert.are.same({ project.path }, entries)
+            assert.are.equal(root .. '/', match.key)
+            assert.are.same({ project.path }, match.entries)
         end)
     end)
 
@@ -245,6 +247,28 @@ describe('prohub.workset', function()
             end
             return table.concat(vim.fn.readfile(file), '\n')
         end
+
+        it('delivers its worktrees later on the main loop', function()
+            local project = git.project()
+            local calls = {}
+
+            local ok = workset.list(project.path, function(worktrees)
+                table.insert(calls, {
+                    count = #worktrees,
+                    fast = vim.in_fast_event(),
+                })
+            end)
+
+            assert.is_true(ok)
+            assert.are.same({}, calls)
+            assert(
+                vim.wait(5000, function()
+                    return #calls > 0
+                end),
+                'the callback was not called'
+            )
+            assert.are.same({ { count = 1, fast = false } }, calls)
+        end)
 
         it('shows the project that holds the directory', function()
             local project = git.project()
