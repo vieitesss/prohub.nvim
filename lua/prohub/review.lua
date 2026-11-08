@@ -2,11 +2,17 @@
 ---review (docs/adr/0003), so this module opens it, keeps it and closes it, and
 ---the configured diff viewer renders into it.
 ---
----A review is keyed by the real path of its worktree, so a path with a
----trailing slash, or a symbolic link to the same directory, reuses the review
+---A review is keyed by the root of its worktree, which git resolves from any
+---directory of it, so the root, a path in a subdirectory, a path with a
+---trailing slash and a symbolic link to the same directory all reuse the review
 ---that is already open. Several reviews can be open at the same time, each in
 ---its own tabpage, and each of those tabpages has the worktree as its working
 ---directory.
+---
+---The scope and the base of a review are computed on every open (docs/adr/0002).
+---The diff viewer of an open review is called again only when one of them would
+---show something else, and it then replaces the viewer of the same tabpage
+---(docs/adr/0003).
 ---
 ---When a review closes, the editor returns to the tabpage it was opened from,
 ---or to the hub tabpage when that one is gone. This module does not build the
@@ -20,6 +26,7 @@
 local M = {}
 
 local config = require('prohub.config')
+local git = require('prohub.git')
 local log = require('prohub.log')
 local paths = require('prohub.path')
 local scope = require('prohub.scope')
@@ -37,15 +44,35 @@ local group_name = 'prohub_review'
 ---@field tabpage integer The tabpage the review lives in.
 ---@field opened_from integer The tabpage that was current when it opened.
 ---@field scope prohub.Scope The scope the diff viewer draws.
+---@field base string? The revision the diff viewer draws the changes since,
+---missing exactly when the scope is `uncommitted`.
 ---@field generation integer The viewer instance that draws the review.
 
 ---The autocommand group that follows the tabpages, made by the first open.
 ---@type integer?
 local group
 
----The open reviews, by the real path of their worktree.
+---The open reviews, by the real path of their worktree root.
 ---@type table<string, prohub.review.Review>
 local reviews = {}
+
+---The root of the worktree that holds a path. Git decides it, so a directory in
+---a subdirectory of a worktree and the root of that worktree are one review.
+---@param path string Absolute path of a directory.
+---@return string? root
+---@return string? err
+local function root_of(path)
+    local out, err = git.run_sync(path, { 'rev-parse', '--show-toplevel' })
+    if not out then
+        return nil, err
+    end
+
+    local root = vim.trim(out)
+    if root == '' then
+        return nil, ('prohub: git names no worktree root for %s'):format(path)
+    end
+    return paths.normalize(root, path)
+end
 
 ---Go to a tabpage when it is still open.
 ---@param tabpage integer?
@@ -163,6 +190,7 @@ local function create(path, result)
         tabpage = vim.api.nvim_get_current_tabpage(),
         opened_from = opened_from,
         scope = result.scope,
+        base = result.base,
         generation = 1,
     }
     reviews[path] = review
@@ -184,8 +212,8 @@ local function create(path, result)
 end
 
 ---Go to the tabpage of a review that is already open. The diff viewer is only
----called again when the scope changed, in the tabpage the review already
----occupies.
+---called again when the review would show something else: another scope, or
+---another base for the same scope, because the base is computed on every open.
 ---@param review prohub.review.Review
 ---@param result prohub.ScopeResult
 ---@return true|nil ok
@@ -193,14 +221,16 @@ end
 local function reuse(review, result)
     go_to(review.tabpage)
 
-    if review.scope == result.scope then
+    if review.scope == result.scope and review.base == result.base then
         return true
     end
 
-    -- The viewer instance that draws the new scope replaces the one before it,
-    -- and the close that instance reports later belongs to the old generation.
+    -- The viewer instance that draws the new changes replaces the one before
+    -- it, and the close that instance reports later belongs to the old
+    -- generation.
     review.generation = review.generation + 1
     review.scope = result.scope
+    review.base = result.base
     local generation = review.generation
     local ok, err = viewer.open({
         path = review.path,
@@ -237,6 +267,11 @@ local function start(path, opts)
         return nil, err
     end
 
+    local root, root_err = root_of(path)
+    if not root then
+        return nil, root_err
+    end
+
     local options, options_err = config.get()
     if not options then
         return nil, options_err
@@ -251,29 +286,30 @@ local function start(path, opts)
         name = opts.scope
     end
 
-    local real = vim.uv.fs_realpath(path) or path
-    local result, scope_err = scope.resolve_sync(real, name)
+    local result, scope_err = scope.resolve_sync(root, name)
     if not result then
         return nil, scope_err
     end
 
     watch_tabpages()
 
-    local existing = reviews[real]
+    local existing = reviews[root]
     if existing and vim.api.nvim_tabpage_is_valid(existing.tabpage) then
         return reuse(existing, result)
     end
-    return create(real, result)
+    return create(root, result)
 end
 
 ---Open the review of one worktree, or go to the one that is already open.
 ---
----The scope is resolved with `prohub.scope`, and the scope the result carries
----is the one the review shows, because a scope that cannot be resolved falls
----back to another one. A path or scope error is returned before a tabpage is
----created, and a viewer that fails leaves none behind. This function never
----throws.
----@param path string Path of the worktree to review.
+---`path` is a directory of the worktree, and git resolves the root of that
+---worktree, which is the path the review shows and the key that reuses it. A
+---path outside a git worktree is an error for every scope. The scope is
+---resolved with `prohub.scope`, and the scope the result carries is the one the
+---review shows, because a scope that cannot be resolved falls back to another
+---one. A path or scope error is returned before a tabpage is created, and a
+---viewer that fails leaves none behind. This function never throws.
+---@param path string Path of a directory of the worktree to review.
 ---@param opts? prohub.ReviewOpts
 ---@return true|nil ok
 ---@return string? err

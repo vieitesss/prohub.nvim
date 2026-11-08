@@ -100,6 +100,67 @@ describe('prohub.review', function()
         assert.equals('uncommitted', calls[1].scope)
     end)
 
+    it('opens the review of a subdirectory on its worktree root', function()
+        local project = git.project()
+        local feature = project:worktree('feature')
+        vim.fn.mkdir(feature.path .. '/docs', 'p')
+
+        assert.is_true(
+            review.open(feature.path .. '/docs', { scope = 'uncommitted' })
+        )
+
+        assert.equals(1, #calls)
+        assert.equals(feature.path, calls[1].path)
+    end)
+
+    it('reuses the review of the worktree that holds the path', function()
+        local project = git.project()
+        local feature = project:worktree('feature')
+        vim.fn.mkdir(feature.path .. '/docs', 'p')
+
+        assert.is_true(review.open(feature.path, { scope = 'uncommitted' }))
+        assert.is_true(
+            review.open(feature.path .. '/docs', { scope = 'uncommitted' })
+        )
+
+        assert.equals(1, #calls)
+    end)
+
+    it('keeps the review of the same scope and base', function()
+        local project = git.project()
+        local feature = project:worktree('feature')
+        feature:commit('a.txt', 'a', 'a change on the feature')
+
+        assert.is_true(review.open(feature.path, { scope = 'branch' }))
+        assert.is_true(review.open(feature.path, { scope = 'branch' }))
+
+        assert.equals(1, #calls)
+    end)
+
+    it('calls the viewer again when the base moves', function()
+        local project = git.project()
+        local feature = project:worktree('feature')
+        feature:commit('a.txt', 'a', 'a change on the feature')
+        feature:push()
+        feature:commit('b.txt', 'b', 'another change')
+
+        assert.is_true(review.open(feature.path, { scope = 'unpushed' }))
+        local first = calls[1].base
+
+        feature:git('push', '--quiet')
+        feature:commit('c.txt', 'c', 'a third change')
+
+        assert.is_true(review.open(feature.path, { scope = 'unpushed' }))
+
+        assert.equals(2, #calls)
+        assert.equals('unpushed', calls[2].scope)
+        assert.equals(
+            feature:git('rev-parse', 'refs/remotes/origin/feature'),
+            calls[2].base
+        )
+        assert.is_false(first == calls[2].base)
+    end)
+
     it('returns an error for a directory that is not a git project', function()
         local directory = vim.fn.tempname()
         vim.fn.mkdir(directory, 'p')

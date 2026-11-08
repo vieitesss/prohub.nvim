@@ -117,6 +117,70 @@ describe('prohub review tab lifecycle', function()
         assert.equals(fix.path, tab_cwd(calls[2].tabpage))
     end)
 
+    it(
+        'opens the review of a subdirectory in the tab of its worktree',
+        function()
+            local viewer, calls = recording_viewer()
+            assert.is_true(config.setup({ diff_viewer = viewer }))
+            vim.fn.mkdir(feature.path .. '/docs', 'p')
+
+            assert.is_true(review.open(feature.path, { scope = 'uncommitted' }))
+            local tabpage = calls[1].tabpage
+            vim.api.nvim_set_current_tabpage(vim.api.nvim_list_tabpages()[1])
+
+            assert.is_true(
+                review.open(feature.path .. '/docs', { scope = 'uncommitted' })
+            )
+
+            assert.equals(1, #calls)
+            assert.equals(2, tabs())
+            assert.equals(tabpage, current())
+            assert.equals(feature.path, tab_cwd(tabpage))
+        end
+    )
+
+    it('calls the viewer again in the same tab when the base moves', function()
+        local viewer, calls = recording_viewer()
+        assert.is_true(config.setup({ diff_viewer = viewer }))
+        feature:commit('a.txt', 'a', 'a change on the feature')
+        feature:push()
+        feature:commit('b.txt', 'b', 'another change')
+
+        assert.is_true(review.open(feature.path, { scope = 'unpushed' }))
+        local tabpage = calls[1].tabpage
+
+        feature:git('push', '--quiet')
+        feature:commit('c.txt', 'c', 'a third change')
+
+        assert.is_true(review.open(feature.path, { scope = 'unpushed' }))
+
+        assert.equals(2, #calls)
+        assert.equals(2, tabs())
+        assert.equals(tabpage, current())
+        assert.equals(tabpage, calls[2].tabpage)
+        assert.equals(
+            feature:git('rev-parse', 'refs/remotes/origin/feature'),
+            calls[2].ctx.base
+        )
+        assert.is_false(calls[1].ctx.base == calls[2].ctx.base)
+    end)
+
+    it('opens no tab for a directory that is not a git worktree', function()
+        local viewer, calls = recording_viewer()
+        assert.is_true(config.setup({ diff_viewer = viewer }))
+        local plain = project.container .. '/plain'
+        vim.fn.mkdir(plain, 'p')
+        local origin = current()
+
+        local ok, err = review.open(plain, { scope = 'uncommitted' })
+
+        assert.is_nil(ok)
+        assert.is_string(err)
+        assert.equals(1, tabs())
+        assert.equals(origin, current())
+        assert.equals(0, #calls)
+    end)
+
     it('reuses the tab of a review that is already open', function()
         local viewer, calls = recording_viewer()
         assert.is_true(config.setup({ diff_viewer = viewer }))

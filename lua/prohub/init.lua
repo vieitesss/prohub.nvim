@@ -52,10 +52,12 @@ function M.open(opts)
 end
 
 ---Open a review of one worktree in its own tabpage, or go to the review of
----that worktree that is already open. The scope is the one the options name,
----else the configured default, which is `branch`. A name that is not a scope
----returns an error that lists the valid ones.
----@param path string Path of the worktree to review.
+---that worktree that is already open. `path` is a directory of the worktree,
+---and prohub resolves the root of the worktree that holds it. The scope is the
+---one the options name, else the configured default, which is `branch`. A name
+---that is not a scope returns an error that lists the valid ones, and a path
+---outside a git worktree returns an error instead of opening a review.
+---@param path string Path of a directory of the worktree to review.
 ---@param opts? prohub.ReviewOpts
 ---@return true|nil ok
 ---@return string? err
