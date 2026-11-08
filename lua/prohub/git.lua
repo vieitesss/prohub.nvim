@@ -25,6 +25,9 @@ local M = {}
 local log = require('prohub.log')
 local validate = require('prohub.validate')
 
+---The variables that point git at a project other than the worktree it is
+---given. Every command runs without them, so an editor started from a git hook
+---or from a script still reads the project of the worktree path.
 ---@type string[]
 local git_environment = {
     'GIT_DIR',
@@ -110,6 +113,13 @@ local function check_inputs(path, args)
 end
 
 ---Build the git command without changing the caller's arguments.
+---
+---A variable that is not set needs no removal, and the editor sets none of
+---them in the usual case, so the command starts git directly and pays for one
+---process. `env` costs a second process, which costs as much as git itself,
+---and it is the only way to remove a variable of the editor: `vim.system`
+---merges its environment over the editor's, and Neovim 0.10.0 ignores it
+---entirely when `clear_env` is set.
 ---@param path string
 ---@param args string[]
 ---@return string[] cmd
@@ -118,14 +128,18 @@ local function build(path, args)
     -- refresh in the background never makes the user's own git command fail.
     local cmd =
         vim.list_extend({ 'git', '--no-optional-locks', '-C', path }, args)
-    if vim.fn.executable('env') == 1 then
-        local prefix = { 'env' }
-        for _, name in ipairs(git_environment) do
-            vim.list_extend(prefix, { '-u', name })
+
+    local unset = {}
+    for _, name in ipairs(git_environment) do
+        if vim.env[name] ~= nil then
+            table.insert(unset, '-u')
+            table.insert(unset, name)
         end
-        return vim.list_extend(prefix, cmd)
     end
-    return cmd
+    if #unset == 0 or vim.fn.executable('env') ~= 1 then
+        return cmd
+    end
+    return vim.list_extend(vim.list_extend({ 'env' }, unset), cmd)
 end
 
 ---Turn what `vim.system` returned into the result of the helper.

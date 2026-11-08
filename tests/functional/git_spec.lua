@@ -1,6 +1,7 @@
 local git = require('helpers.git')
 local log = require('prohub.log')
 local prohub_git = require('prohub.git')
+local spawns = require('helpers.spawns')
 
 ---Run git asynchronously and return a startup error or wait for the callback.
 ---@param path any
@@ -22,6 +23,30 @@ local function run(path, args)
         'the callback was not called'
     )
     return out, err
+end
+
+---Run `fn` with every GIT_ variable removed from the environment of the
+---editor, and put them back afterwards. A spec suite can start with GIT_DIR
+---set, for example when it runs from a git hook.
+---@param fn fun()
+local function without_git_environment(fn)
+    local saved = {}
+    for name, value in pairs(vim.fn.environ()) do
+        if name:upper():match('^GIT_') then
+            saved[name] = value
+        end
+    end
+    for name in pairs(saved) do
+        vim.env[name] = nil
+    end
+
+    local ok, err = pcall(fn)
+    for name, value in pairs(saved) do
+        vim.env[name] = value
+    end
+    if not ok then
+        error(err, 0)
+    end
 end
 
 ---Each form of the helper, so the same cases run against both.
@@ -384,6 +409,25 @@ describe('prohub.git', function()
     end)
 
     describe('run_sync', function()
+        it(
+            'starts one process when the editor carries no git project path',
+            function()
+                local project = git.project()
+                local commands
+
+                without_git_environment(function()
+                    commands = spawns.commands(function()
+                        local out =
+                            prohub_git.run_sync(project.path, { 'status' })
+                        assert.is_string(out)
+                    end)
+                end)
+
+                assert.equals(1, #commands)
+                assert.equals('git', commands[1][1])
+            end
+        )
+
         it('returns an error when git cannot be started', function()
             local project = git.project()
             local path = vim.env.PATH
