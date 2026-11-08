@@ -109,7 +109,9 @@ lazy.nvim passes `opts` to `require('prohub').setup()`. See |prohub-config|.
 
                                                                *:ProhubReview*
 :ProhubReview [path] [scope]
-    Opens the review of a worktree.
+    Opens the review of a worktree. The path may be any directory of the
+    worktree: prohub asks git for the root of the worktree that holds it, and
+    the review shows that root.
 
     - With no argument, it reviews the current directory with the default
       scope.
@@ -179,9 +181,9 @@ call and never stores it.
 `unpushed` shows the unpushed changes: everything that differs between the
 last commit that HEAD shares with its remote counterpart and the worktree,
 including uncommitted changes and new files. The remote counterpart is the
-upstream of the branch when that ref exists, and `origin/<branch>` otherwise.
-A worktree with no remote counterpart, and a worktree with a detached HEAD,
-have the same changes as the session changes.
+upstream of the branch when that ref exists, on whichever remote it lives, and
+`origin/<branch>` otherwise. A worktree with no remote counterpart, and a
+worktree with a detached HEAD, have the same changes as the session changes.
 
 `uncommitted` shows the uncommitted changes: the staged, unstaged and
 untracked files, as `git status` lists them. It needs no base.
@@ -226,11 +228,18 @@ Any other failure of git stops the review and reports the error.
 8. REVIEWS                                                    *prohub-reviews*
 
 A review is a diff viewer drawing one scope of one worktree, in its own tab.
-The tab starts in the directory of the worktree.
+The tab starts in the root of the worktree.
 
+- `prohub.review()` and `:ProhubReview` take a directory, and prohub asks git
+  for the root of the worktree that holds it. The review shows that root, and
+  the root is what reuses it.
 - Reviewing a worktree that already has a review shows that tab again.
 - Asking for another scope of an open review shows that scope in the same tab.
+- Asking again for the same scope after its base moved shows the new base in
+  the same tab, because prohub computes the base on every call.
 - Several reviews can be open at once, one per worktree.
+- A directory that is not in a git worktree opens no review, and the error
+  says why.
 - When the review closes, prohub returns to the tab it was opened from. When
   that tab is gone, it returns to the hub, and when there is no hub either, it
   stays where it is.
@@ -449,9 +458,10 @@ prohub.open({opts?})
 
                                                              *prohub.review()*
 prohub.review({path}, {opts?})
-    Opens the review of the worktree at `path`, an absolute path. `opts.scope`
-    is the scope, and it defaults to |prohub-config-default_scope|. The review
-    is open when the function returns `true`. Returns `true|nil, string?`.
+    Opens the review of the worktree that holds `path`, an absolute path of a
+    directory. `opts.scope` is the scope, and it defaults to
+    |prohub-config-default_scope|. The review is open when the function returns
+    `true`. Returns `true|nil, string?`.
 
 ==============================================================================
 13. HEALTH                                                     *prohub-health*

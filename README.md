@@ -67,7 +67,7 @@ Opens the hub of the project, or of the workset, that holds the current director
 
 ### `:ProhubReview [path] [scope]`
 
-Opens the review of a worktree.
+Opens the review of a worktree. The path may be any directory of the worktree: prohub asks git for the root of the worktree that holds it, and the review shows that root.
 
 - With no argument, it reviews the current directory with the default scope.
 - With one argument that is a scope name (`branch`, `unpushed` or `uncommitted`), it reviews the current directory with that scope. If a file or a directory of that name exists in the current directory, the argument is a path instead.
@@ -106,7 +106,7 @@ The hub uses the keymaps configured at the time it opens. Opening the hub again 
 A scope decides which changes a review shows. The three scopes are `branch`, `unpushed` and `uncommitted`.
 
 - `branch` shows the session changes: everything that differs between the base and the worktree, including files git does not track yet. The base is the merge-base of HEAD and the default branch. prohub asks git for it on every call and never stores it.
-- `unpushed` shows the unpushed changes: everything that differs between the last commit that HEAD shares with its remote counterpart and the worktree, including uncommitted changes and new files. The remote counterpart is the upstream of the branch when that ref exists, and `origin/<branch>` otherwise. A worktree with no remote counterpart, and a worktree with a detached HEAD, have the same changes as the session changes.
+- `unpushed` shows the unpushed changes: everything that differs between the last commit that HEAD shares with its remote counterpart and the worktree, including uncommitted changes and new files. The remote counterpart is the upstream of the branch when that ref exists, on whichever remote it lives, and `origin/<branch>` otherwise. A worktree with no remote counterpart, and a worktree with a detached HEAD, have the same changes as the session changes.
 - `uncommitted` shows the uncommitted changes: the staged, unstaged and untracked files, as `git status` lists them. It needs no base.
 
 The default branch is the first of these that exists: the `default_branch` option, `origin/HEAD`, a local `main`, and a local `master`. The `origin/` ref of a name is used when it exists, and the local branch otherwise.
@@ -135,11 +135,14 @@ Any other failure of git stops the review and reports the error.
 
 ## Reviews
 
-A review is a diff viewer drawing one scope of one worktree, in its own tab. The tab starts in the directory of the worktree.
+A review is a diff viewer drawing one scope of one worktree, in its own tab. The tab starts in the root of the worktree.
 
+- `prohub.review()` and `:ProhubReview` take a directory, and prohub asks git for the root of the worktree that holds it. The review shows that root, and the root is what reuses it.
 - Reviewing a worktree that already has a review shows that tab again.
 - Asking for another scope of an open review shows that scope in the same tab.
+- Asking again for the same scope after its base moved shows the new base in the same tab, because prohub computes the base on every call.
 - Several reviews can be open at once, one per worktree.
+- A directory that is not in a git worktree opens no review, and the error says why.
 - When the review closes, prohub returns to the tab it was opened from. When that tab is gone, it returns to the hub, and when there is no hub either, it stays where it is.
 - Closing the tab of a review with `:tabclose` forgets the review.
 
@@ -261,7 +264,7 @@ Each function returns `true` when it succeeds. When it fails, it returns `nil` a
 
 - `prohub.setup(opts?)`: `opts` takes the options of [Configuration](#configuration). Every field is optional. Returns `true|nil, string?`.
 - `prohub.open(opts?)`: opens the hub. `opts.cwd` is the directory the hub is opened from, and it defaults to the current directory. The rows appear after the function returns. Returns `true|nil, string?`.
-- `prohub.review(path, opts?)`: opens the review of the worktree at `path`, an absolute path. `opts.scope` is the scope, and it defaults to `default_scope`. The review is open when the function returns `true`. Returns `true|nil, string?`.
+- `prohub.review(path, opts?)`: opens the review of the worktree that holds `path`, an absolute path of a directory. `opts.scope` is the scope, and it defaults to `default_scope`. The review is open when the function returns `true`. Returns `true|nil, string?`.
 
 ## Health
 
