@@ -4,10 +4,16 @@ plenary_url := "https://github.com/nvim-lua/plenary.nvim"
 _default:
 	just -l
 
-# Run the plenary test suite headlessly.
-test:
+# Run the plenary test suite headlessly. Pass spec paths, relative to this
+# directory, to run only those: just test tests/functional/base_spec.lua
+test *paths:
 	#!/usr/bin/env bash
 	set -euo pipefail
+	cd "{{ justfile_directory() }}"
+
+	# just passes the arguments of a shebang recipe through interpolation.
+	set -- {{paths}}
+
 	plenary_path="{{ justfile_directory() }}/plenary.nvim"
 
 	if ! test -d "${plenary_path}"; then
@@ -17,9 +23,23 @@ test:
 	git -C "${plenary_path}" checkout "{{ plenary_ref }}"
 
 	minimal_init="{{ justfile_directory() }}/tests/minimal_init.lua"
-	nvim --headless --noplugin \
-		-u "${minimal_init}" \
-		-c "lua require('plenary.test_harness').test_directory('tests', { minimal_init = '${minimal_init}' })"
+	if [ "$#" -eq 0 ]; then
+		# The harness runs every spec file in its own editor, in parallel.
+		nvim --headless --noplugin \
+			-u "${minimal_init}" \
+			-c "lua require('plenary.test_harness').test_directory('tests', { minimal_init = '${minimal_init}' })"
+		exit
+	fi
+
+	# One editor per spec file, and every file runs even after a failure.
+	status=0
+	for path in "$@"; do
+		nvim --headless --noplugin \
+			-u "${minimal_init}" \
+			-c "lua require('plenary.busted').run(vim.fn.fnamemodify('${path}', ':p'))" \
+			|| status=$?
+	done
+	exit "${status}"
 
 # Format the Lua sources with stylua.
 format:
