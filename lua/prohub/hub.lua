@@ -26,6 +26,13 @@
 ---The keys of a hub are buffer-local mappings from the options, and they live
 ---in `prohub.hub.keymaps`: the hub hands that module the worktree of the row
 ---under the cursor, a refresh and a close.
+---
+---A hub also renders itself again while it is shown in a window of the current
+---tabpage and Neovim has focus, on the timer and the events of
+---`prohub.hub.refresh`. The hub hands that module its buffer and the action
+---that renders it again, and such a render writes the buffer in place and
+---drops a result whose hub is gone, so the timer never takes the user back to
+---the hub.
 ---@class prohub.hub
 local M = {}
 
@@ -37,7 +44,9 @@ local render = require('prohub.hub.render')
 local status = require('prohub.status')
 local tab = require('prohub.tab')
 local validate = require('prohub.validate')
+local watch = require('prohub.hub.refresh')
 local workset = require('prohub.workset')
+local worktree = require('prohub.worktree')
 
 ---The prefix of the name of the buffer of a hub.
 ---@type string
@@ -55,7 +64,11 @@ local namespace = vim.api.nvim_create_namespace('prohub_hub')
 ---@field missing? table<string, true> The worktrees git reports as missing.
 ---@field worktrees? prohub.Worktree[] The worktrees the last render listed.
 ---@field dir? string The directory the hub was opened from.
+---@field workset? boolean Whether the hub shows the worktrees of a workset.
 ---@field mapped? boolean Whether the keys of the hub are on its buffer.
+---@field watching? boolean Whether the timer and the events of the hub follow
+---its buffer.
+---@field rendering? integer The renders of the hub that are in flight.
 
 ---The open hubs, by key.
 ---@type table<string, prohub.hub.Hub>
@@ -163,23 +176,9 @@ local function cursor_row(hub)
     return path, hub.missing ~= nil and hub.missing[path] == true
 end
 
----Collect the status of every worktree of a hub again and render the hub, so
----the rows show what the worktrees hold now. The hub is rendered again through
----the same path an open takes, so a worktree added since the last render shows
----up too.
----@param hub prohub.hub.Hub
----@return true|nil ok
----@return string? err
-local function refresh(hub)
-    if not hub.dir then
-        return nil, 'prohub: the hub has no directory to render again'
-    end
-
-    for _, record in ipairs(hub.worktrees or {}) do
-        status.invalidate(record.path)
-    end
-    return M.open({ cwd = hub.dir })
-end
+---The steps below call each other, so the two that the timer and the keys
+---reach through more than one step are named before they are written.
+local attach, rerender
 
 ---Close the hub: the tabpage it occupies when it is not the last one, else an
 ---empty buffer in that tabpage, which only hides the hub buffer. The hub is
@@ -189,6 +188,8 @@ end
 ---@return string? err
 local function close(hub)
     hubs[hub.key] = nil
+    watch.detach(hub.buffer)
+    hub.watching = false
 
     local tabpage = hub.tabpage
     hub.tabpage = nil
@@ -221,36 +222,23 @@ local function close(hub)
     return true
 end
 
----Map the keys of a hub onto its buffer, once per buffer.
+---Show the hub in its tabpage, which it makes current when the user moved
+---away and creates when the tabpage is gone.
 ---@param hub prohub.hub.Hub
-local function attach(hub)
-    if hub.mapped then
-        return
+local function present(hub)
+    if hub.tabpage and vim.api.nvim_tabpage_is_valid(hub.tabpage) then
+        vim.api.nvim_set_current_tabpage(hub.tabpage)
+    else
+        hub.tabpage = new_tab(hub.buffer, hub.key)
     end
-
-    local ok, err = keymaps.attach(hub.buffer, {
-        cursor = function()
-            return cursor_row(hub)
-        end,
-        refresh = function()
-            return refresh(hub)
-        end,
-        close = function()
-            return close(hub)
-        end,
-    })
-    if not ok then
-        log.error('the keys of the hub could not be mapped: %s', tostring(err))
-        return
-    end
-    hub.mapped = true
 end
 
----The hub of `key`, with its tabpage current. A tabpage the user closed and a
----buffer the user wiped are made again, so a hub never finds one of them gone.
+---The hub of `key`, with the buffer, the keys and the timer that belong to it.
+---A tabpage the user closed and a buffer the user wiped are made again, so a
+---hub never finds one of them gone. Neither is shown.
 ---@param key string
 ---@return prohub.hub.Hub
-local function show(key)
+local function ensure(key)
     local hub = hubs[key]
     if not hub then
         hub = { key = key, buffer = new_buffer(key), paths = {} }
@@ -259,16 +247,53 @@ local function show(key)
         hub.buffer = new_buffer(key)
         hub.paths = {}
         hub.mapped = false
+        hub.watching = false
     end
 
     attach(hub)
-
-    if hub.tabpage and vim.api.nvim_tabpage_is_valid(hub.tabpage) then
-        vim.api.nvim_set_current_tabpage(hub.tabpage)
-    else
-        hub.tabpage = new_tab(hub.buffer, key)
-    end
     return hub
+end
+
+---Map the keys of a hub onto its buffer and follow it with the timer and the
+---events of `prohub.hub.refresh`, once per buffer.
+---@param hub prohub.hub.Hub
+attach = function(hub)
+    if not hub.mapped then
+        local ok, err = keymaps.attach(hub.buffer, {
+            cursor = function()
+                return cursor_row(hub)
+            end,
+            refresh = function()
+                return rerender(hub, false)
+            end,
+            close = function()
+                return close(hub)
+            end,
+        })
+        if ok then
+            hub.mapped = true
+        else
+            log.error(
+                'the keys of the hub could not be mapped: %s',
+                tostring(err)
+            )
+        end
+    end
+
+    if hub.watching then
+        return
+    end
+    local watching, watch_err = watch.attach(hub.buffer, function()
+        return rerender(hub, true)
+    end)
+    if not watching then
+        log.error(
+            'the refresh of the hub could not be watched: %s',
+            tostring(watch_err)
+        )
+        return
+    end
+    hub.watching = true
 end
 
 ---The first line that holds a row.
@@ -285,10 +310,15 @@ local function first_line(listed)
 end
 
 ---Put the cursor back on the row of the worktree it was on, or on the first
----row when that row is gone.
+---row when that row is gone. A hub whose tabpage is gone has no window to keep
+---the cursor in, so there is nothing to do.
 ---@param hub prohub.hub.Hub
 ---@param path string?
 local function restore_cursor(hub, path)
+    if not hub.tabpage or not vim.api.nvim_tabpage_is_valid(hub.tabpage) then
+        return
+    end
+
     local win = vim.api.nvim_tabpage_get_win(hub.tabpage)
     if vim.api.nvim_win_get_buf(win) ~= hub.buffer then
         return
@@ -327,17 +357,17 @@ local function write(buffer, lines, highlights)
     vim.api.nvim_set_option_value('modifiable', false, { buf = buffer })
 end
 
----Render the rows of a hub, creating or reusing its tabpage, and keep the
----cursor on the worktree it was on.
----@param key string
+---Write the rows of a hub into its buffer and keep the cursor of its window on
+---the worktree it was on. Nothing else of the editor changes, so a render that
+---runs while the user is elsewhere does not take the user to the hub.
+---@param hub prohub.hub.Hub
 ---@param dir string Directory the hub was opened from.
 ---@param worktrees prohub.Worktree[]
 ---@param collections table<string, prohub.hub.Collection>
-local function render_rows(key, dir, worktrees, collections)
+local function render_rows(hub, dir, worktrees, collections)
     local rows = render.build(worktrees, collections)
-    local previous = hubs[key] and cursor_row(hubs[key]) or nil
+    local previous = cursor_row(hub)
 
-    local hub = show(key)
     define_highlights()
     hub.dir = dir
     hub.worktrees = worktrees
@@ -347,13 +377,38 @@ local function render_rows(key, dir, worktrees, collections)
     restore_cursor(hub, previous)
 end
 
----Collect the status of every worktree that is not missing, all at the same
----time, and render the hub once every collection has answered. A collection
----that fails renders its own row with the error and does not fail the hub.
----@param key string
+---Write the rows of a listing into a hub, and show the hub first when the
+---render comes from an open. The record of the render is dropped whether the
+---rows are written or not, so a failure never keeps the next render out.
+---@param hub prohub.hub.Hub
+---@param show boolean Whether to make the tabpage of the hub current.
 ---@param dir string Directory the hub was opened from.
 ---@param worktrees prohub.Worktree[]
-local function collect(key, dir, worktrees)
+---@param collections table<string, prohub.hub.Collection>
+local function draw(hub, show, dir, worktrees, collections)
+    hub.rendering = (hub.rendering or 0) + 1
+    local ok, err = pcall(function()
+        if show then
+            present(hub)
+        end
+        render_rows(hub, dir, worktrees, collections)
+    end)
+    hub.rendering = (hub.rendering or 1) - 1
+    if not ok then
+        log.error(
+            'the hub of %s could not be rendered: %s',
+            hub.key,
+            tostring(err)
+        )
+    end
+end
+
+---Collect the status of every worktree that is not missing, all at the same
+---time, and deliver the rows once every collection has answered. A collection
+---that fails renders its own row with the error and does not fail the hub.
+---@param worktrees prohub.Worktree[]
+---@param finish fun(worktrees: prohub.Worktree[], collections: table<string, prohub.hub.Collection>)
+local function collect(worktrees, finish)
     local collections = {}
     local remaining = 0
     for _, entry in ipairs(worktrees) do
@@ -363,13 +418,13 @@ local function collect(key, dir, worktrees)
     end
 
     local collecting = true
-    local rendered = false
-    local function finish()
-        if collecting or rendered or remaining > 0 then
+    local delivered = false
+    local function deliver()
+        if collecting or delivered or remaining > 0 then
             return
         end
-        rendered = true
-        render_rows(key, dir, worktrees, collections)
+        delivered = true
+        finish(worktrees, collections)
     end
 
     local function record(path, result, message)
@@ -381,7 +436,7 @@ local function collect(key, dir, worktrees)
             collections[path] = { err = message }
         end
         remaining = remaining - 1
-        finish()
+        deliver()
     end
 
     for _, entry in ipairs(worktrees) do
@@ -397,7 +452,111 @@ local function collect(key, dir, worktrees)
     end
 
     collecting = false
-    finish()
+    deliver()
+end
+
+---Render a hub again from a fresh listing, into the hub it was started for.
+---The timer and the events of the hub render in place; the refresh key renders
+---through the path an open takes, which shows the hub.
+---@param hub prohub.hub.Hub
+---@param automatic boolean Whether the timer or an event asked for the render,
+---rather than a key. Such a failure is logged instead of notified, and a
+---result whose hub is gone is dropped.
+---@return true|nil ok
+---@return string? err
+rerender = function(hub, automatic)
+    if not hub.dir then
+        return nil, 'prohub: the hub has no directory to render again'
+    end
+    if (hub.rendering or 0) > 0 then
+        log.debug('the hub of %s is rendered already', hub.key)
+        return true
+    end
+
+    local options, options_err = config.get()
+    if not options then
+        return nil, options_err
+    end
+
+    for _, record in ipairs(hub.worktrees or {}) do
+        status.invalidate(record.path)
+    end
+
+    -- One render per hub at a time: the record stays until the listing and
+    -- every status have answered, so nothing else starts meanwhile.
+    hub.rendering = 1
+    local buffer = hub.buffer
+    local key, dir = hub.key, hub.dir
+
+    local function settle()
+        hub.rendering = 0
+    end
+
+    local function failed(message)
+        settle()
+        if automatic then
+            log.warn('the hub of %s was not rendered: %s', key, message)
+            return
+        end
+        log.debug('the hub of %s was not rendered: %s', key, message)
+        vim.notify(message, vim.log.levels.ERROR)
+    end
+
+    -- A project lists its worktrees itself, so an automatic refresh of a
+    -- project that stopped being one fails quietly instead of warning the user
+    -- again on every tick. A workset is resolved again, as it was opened.
+    local list = worktree.list
+    if hub.workset then
+        list = workset.list
+    end
+
+    local started, list_err = list(dir, function(worktrees, err)
+        if err then
+            return failed(err)
+        end
+        if not worktrees or #worktrees == 0 then
+            settle()
+            if automatic then
+                log.warn('the hub of %s lists no worktree', key)
+            end
+            return
+        end
+
+        collect(worktrees, function(listed, collections)
+            local rendered, render_err = pcall(function()
+                if automatic then
+                    if
+                        hubs[key] ~= hub
+                        or hub.buffer ~= buffer
+                        or not vim.api.nvim_buf_is_valid(buffer)
+                    then
+                        log.debug(
+                            'the hub of %s is gone, so the render is dropped',
+                            key
+                        )
+                        return
+                    end
+                    draw(hub, false, dir, listed, collections)
+                else
+                    local target = ensure(key)
+                    target.workset = hub.workset
+                    draw(target, true, dir, listed, collections)
+                end
+            end)
+            settle()
+            if not rendered then
+                log.error(
+                    'the hub of %s could not be rendered: %s',
+                    key,
+                    tostring(render_err)
+                )
+            end
+        end)
+    end)
+    if not started then
+        failed(list_err)
+    end
+    return true
 end
 
 ---Whether `dir` is `path` or a directory inside it.
@@ -417,19 +576,20 @@ end
 ---@param dir string
 ---@param worktrees prohub.Worktree[]
 ---@param worksets table<string, string[]|fun(): string[]>
----@return string
+---@return string key
+---@return boolean workset Whether the key names a workset.
 local function identity(dir, worktrees, worksets)
     for _, record in ipairs(worktrees) do
         if contains(record.path, dir) then
-            return worktrees[1].path
+            return worktrees[1].path, false
         end
     end
 
     local match = workset.match(dir, worksets)
     if match then
-        return match.key
+        return match.key, true
     end
-    return worktrees[1].path
+    return worktrees[1].path, false
 end
 
 ---Show the worktrees a listing delivered. A failure is the one the user can
@@ -449,7 +609,12 @@ local function shown(dir, worksets, worktrees, err)
         return
     end
 
-    collect(identity(dir, worktrees, worksets), dir, worktrees)
+    local key, is_workset = identity(dir, worktrees, worksets)
+    collect(worktrees, function(listed, collections)
+        local hub = ensure(key)
+        hub.workset = is_workset
+        draw(hub, true, dir, listed, collections)
+    end)
 end
 
 ---@param opts? prohub.OpenOpts
