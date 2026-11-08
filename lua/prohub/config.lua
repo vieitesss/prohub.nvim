@@ -61,13 +61,18 @@ local defaults = {
     },
 }
 
----The scopes a review can show. The `prohub.Scope` alias names them.
+---The scopes a review can show. The `prohub.Scope` alias names them and the
+---options accept only these, so `prohub.scope` reads the same list.
 ---@type table<string, true>
 local scopes = {
     branch = true,
     unpushed = true,
     uncommitted = true,
 }
+
+---The scopes a review can show, keyed by name.
+---@type table<string, true>
+M.scopes = scopes
 
 ---The options a user can set.
 ---@type table<string, true>

@@ -36,6 +36,14 @@ describe('prohub.config', function()
         }, options)
     end)
 
+    it('names the scopes a review can show', function()
+        assert.same({
+            branch = true,
+            unpushed = true,
+            uncommitted = true,
+        }, config.scopes)
+    end)
+
     it('lets vim.g.prohub override the defaults', function()
         vim.g.prohub = { refresh_interval = 1000 }
 
