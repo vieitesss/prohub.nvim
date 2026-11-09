@@ -47,6 +47,8 @@ local group_name = 'prohub_review'
 ---@field base string? The revision the diff viewer draws the changes since,
 ---missing exactly when the scope is `uncommitted`.
 ---@field generation integer The viewer instance that draws the review.
+local Review = {}
+Review.__index = Review
 
 ---The autocommand group that follows the tabpages, made by the first open.
 ---@type integer?
@@ -85,54 +87,51 @@ local function go_to(tabpage)
     return false
 end
 
----Go back to where a review was opened from: the tabpage it was opened from,
----else the hub tabpage, else nowhere, so the editor stays where it is.
----@param review prohub.review.Review
-local function return_from(review)
-    if go_to(review.opened_from) then
+---Go back to where the review was opened from: the tabpage it was opened
+---from, else the hub tabpage, else nowhere, so the editor stays where it is.
+function Review:return_from()
+    if go_to(self.opened_from) then
         return
     end
     go_to(tab.hub())
 end
 
----Give up on a review: forget it, close its tabpage when there is one to close
----and return to the tabpage it was opened from.
----@param review prohub.review.Review
-local function abandon(review)
-    reviews[review.path] = nil
-    local _, close_err = tab.close(review.tabpage)
+---Give up on the review: forget it, close its tabpage when there is one to
+---close and return to the tabpage it was opened from.
+function Review:abandon()
+    reviews[self.path] = nil
+    local _, close_err = tab.close(self.tabpage)
     if close_err then
         log.debug(
             'the tabpage of the review could not be closed: %s',
             close_err
         )
     end
-    return_from(review)
+    self:return_from()
 end
 
----Forget a review and return from it. A close that arrives from a viewer
+---Forget the review and return from it. A close that arrives from a viewer
 ---instance that has since been replaced, and one for a review that is already
 ---closed, are ignored: the diff viewer replaces its own window when it is
 ---asked for another scope, and the instance it replaced may report the close
 ---of that window later.
----@param review prohub.review.Review
 ---@param generation? integer The viewer instance that asked to close.
-local function close(review, generation)
-    if reviews[review.path] ~= review then
-        log.debug('the review of %s is already closed', review.path)
+function Review:close(generation)
+    if reviews[self.path] ~= self then
+        log.debug('the review of %s is already closed', self.path)
         return
     end
-    if generation and generation ~= review.generation then
+    if generation and generation ~= self.generation then
         log.debug(
             'ignoring the close of %s from a replaced viewer (%d of %d)',
-            review.path,
+            self.path,
             generation,
-            review.generation
+            self.generation
         )
         return
     end
 
-    abandon(review)
+    self:abandon()
 end
 
 ---Forget the reviews whose tabpage was closed by the user and return from
@@ -148,7 +147,7 @@ local function prune()
     end
 
     for _, path in ipairs(closed) do
-        close(reviews[path])
+        reviews[path]:close()
     end
 end
 
@@ -172,76 +171,66 @@ local function watch_tabpages()
     })
 end
 
----Open a review of a worktree that is not open yet, in a tabpage of its own.
----A diff viewer that fails leaves no tabpage behind, and the editor returns to
----the tabpage the review was opened from.
+---Open the tabpage of a review that is not open yet, with the worktree as its
+---working directory, and make it the current one.
 ---@param path string Real path of the worktree.
 ---@param result prohub.ScopeResult
----@return true|nil ok
----@return string? err
-local function create(path, result)
+---@return prohub.review.Review
+local function new(path, result)
     local opened_from = vim.api.nvim_get_current_tabpage()
 
     vim.cmd('tabnew')
     vim.cmd('tcd ' .. vim.fn.fnameescape(path))
 
-    local review = {
+    return setmetatable({
         path = path,
         tabpage = vim.api.nvim_get_current_tabpage(),
         opened_from = opened_from,
         scope = result.scope,
         base = result.base,
         generation = 1,
-    }
-    reviews[path] = review
-
-    local generation = review.generation
-    local ok, err = viewer.open({
-        path = path,
-        scope = result.scope,
-        base = result.base,
-        on_close = function()
-            close(review, generation)
-        end,
-    })
-    if not ok then
-        abandon(review)
-        return nil, err
-    end
-    return true
+    }, Review)
 end
 
----Go to the tabpage of a review that is already open. The diff viewer is only
----called again when the review would show something else: another scope, or
----another base for the same scope, because the base is computed on every open.
----@param review prohub.review.Review
+---Open the diff viewer of the review in its tabpage, for the scope and the
+---base it records. A close that the viewer reports ends that viewer instance,
+---which is the generation the review carries now.
+---@return true|nil ok
+---@return string? err
+function Review:view()
+    local generation = self.generation
+    return viewer.open({
+        path = self.path,
+        scope = self.scope,
+        base = self.base,
+        on_close = function()
+            self:close(generation)
+        end,
+    })
+end
+
+---Go to the tabpage of the review. The diff viewer is only called again when
+---the review would show something else: another scope, or another base for the
+---same scope, because the base is computed on every open.
 ---@param result prohub.ScopeResult
 ---@return true|nil ok
 ---@return string? err
-local function reuse(review, result)
-    go_to(review.tabpage)
+function Review:reuse(result)
+    go_to(self.tabpage)
 
-    if review.scope == result.scope and review.base == result.base then
+    if self.scope == result.scope and self.base == result.base then
         return true
     end
 
     -- The viewer instance that draws the new changes replaces the one before
     -- it, and the close that instance reports later belongs to the old
     -- generation.
-    review.generation = review.generation + 1
-    review.scope = result.scope
-    review.base = result.base
-    local generation = review.generation
-    local ok, err = viewer.open({
-        path = review.path,
-        scope = result.scope,
-        base = result.base,
-        on_close = function()
-            close(review, generation)
-        end,
-    })
+    self.generation = self.generation + 1
+    self.scope = result.scope
+    self.base = result.base
+    local ok, err = self:view()
     if not ok then
-        abandon(review)
+        self:abandon()
         return nil, err
     end
     return true
@@ -295,9 +284,17 @@ local function start(path, opts)
 
     local existing = reviews[root]
     if existing and vim.api.nvim_tabpage_is_valid(existing.tabpage) then
-        return reuse(existing, result)
+        return existing:reuse(result)
     end
-    return create(root, result)
+
+    local review = new(root, result)
+    reviews[root] = review
+    local viewed, view_err = review:view()
+    if not viewed then
+        review:abandon()
+        return nil, view_err
+    end
+    return true
 end
 
 ---Open the review of one worktree, or go to the one that is already open.

@@ -33,6 +33,8 @@ local validate = require('prohub.validate')
 ---@field interval integer Milliseconds between two renders of the hub.
 ---@field group integer The augroup of the buffer.
 ---@field timer? any The timer, while it runs.
+local State = {}
+State.__index = State
 
 ---The states this module follows, by buffer.
 ---@type table<integer, prohub.hub.refresh.State>
@@ -55,41 +57,38 @@ local moved = {
     'WinClosed',
 }
 
----Whether a state still follows its buffer.
----@param state prohub.hub.refresh.State
+---Whether the state still follows its buffer.
 ---@return boolean
-local function live(state)
-    return states[state.buffer] == state
-        and vim.api.nvim_buf_is_valid(state.buffer)
+function State:live()
+    return states[self.buffer] == self
+        and vim.api.nvim_buf_is_valid(self.buffer)
 end
 
----Whether the hub of a state is shown in a window of the current tabpage and
+---Whether the hub of the state is shown in a window of the current tabpage and
 ---Neovim has focus, which is the rule the timer obeys.
----@param state prohub.hub.refresh.State
 ---@return boolean
-local function holds(state)
-    if not focused or not live(state) then
+function State:holds()
+    if not focused or not self:live() then
         return false
     end
 
     local tabpage = vim.api.nvim_get_current_tabpage()
     for _, window in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
-        if vim.api.nvim_win_get_buf(window) == state.buffer then
+        if vim.api.nvim_win_get_buf(window) == self.buffer then
             return true
         end
     end
     return false
 end
 
----Close the timer of a state, if it runs.
----@param state prohub.hub.refresh.State
-local function stop(state)
-    local timer = state.timer
+---Close the timer of the state, if it runs.
+function State:stop()
+    local timer = self.timer
     if not timer then
         return
     end
 
-    state.timer = nil
+    self.timer = nil
     pcall(function()
         timer:stop()
         if not timer:is_closing() then
@@ -100,43 +99,146 @@ end
 
 ---Ask the hub to render itself again. A failure that throws is logged,
 ---because no key asked for this render.
----@param state prohub.hub.refresh.State
-local function trigger(state)
-    local called, err = pcall(state.refresh)
+function State:trigger()
+    local called, err = pcall(self.refresh)
     if not called then
         log.error(
             'the hub of %s could not be rendered again: %s',
-            state.buffer,
+            self.buffer,
             tostring(err)
         )
     end
 end
 
----Start the timer of a state, unless it runs already or the rule fails.
----@param state prohub.hub.refresh.State
-local function start(state)
-    if state.timer or not holds(state) then
+---Start the timer of the state, unless it runs already or the rule fails.
+function State:start()
+    if self.timer or not self:holds() then
         return
     end
 
     local timer = vim.uv.new_timer()
     if not timer then
-        log.error('no timer could be started for the hub of %s', state.buffer)
+        log.error('no timer could be started for the hub of %s', self.buffer)
         return
     end
 
-    state.timer = timer
-    timer:start(state.interval, state.interval, function()
+    self.timer = timer
+    timer:start(self.interval, self.interval, function()
         -- The callback of a timer runs in a fast event, where the editor API
         -- is off limits until the main loop takes over.
         vim.schedule(function()
-            if not live(state) or not holds(state) then
-                stop(state)
+            if not self:live() or not self:holds() then
+                self:stop()
                 return
             end
-            trigger(state)
+            self:trigger()
         end)
     end)
+end
+
+---Stop following the buffer: forget the state, close its timer and clear its
+---autocommands.
+function State:detach()
+    states[self.buffer] = nil
+    self:stop()
+    if self.group then
+        pcall(vim.api.nvim_del_augroup_by_id, self.group)
+        self.group = nil
+    end
+end
+
+---Keep the timer running exactly while the rule holds, and stop following a
+---buffer that is gone.
+function State:update()
+    if not self:live() then
+        return M.detach(self.buffer)
+    end
+    if self:holds() then
+        self:start()
+    else
+        self:stop()
+    end
+end
+
+---An autocommand that checks the rule once the editor is done with the change
+---that fired it.
+---@return fun() callback
+function State:watched()
+    return function()
+        vim.schedule(function()
+            self:update()
+        end)
+    end
+end
+
+---Follow one buffer: the timer, the events that start and stop it, and the two
+---events that render the hub again at once.
+function State:install()
+    local group = vim.api.nvim_create_augroup(
+        ('prohub_hub_refresh_%d'):format(self.buffer),
+        { clear = true }
+    )
+    self.group = group
+
+    -- A wiped buffer cannot be shown again, so it leaves nothing behind.
+    vim.api.nvim_create_autocmd('BufWipeout', {
+        group = group,
+        buffer = self.buffer,
+        once = true,
+        callback = function()
+            M.detach(self.buffer)
+        end,
+    })
+
+    -- Entering the buffer is the moment the user comes back to the hub.
+    vim.api.nvim_create_autocmd('BufEnter', {
+        group = group,
+        buffer = self.buffer,
+        callback = function()
+            if not self:live() or not self:holds() then
+                return
+            end
+            self:start()
+            self:trigger()
+        end,
+    })
+
+    -- A hidden buffer is shown in no window.
+    vim.api.nvim_create_autocmd('BufHidden', {
+        group = group,
+        buffer = self.buffer,
+        callback = self:watched(),
+    })
+
+    -- Focus is what the timer cannot read from the editor.
+    vim.api.nvim_create_autocmd('FocusGained', {
+        group = group,
+        pattern = '*',
+        callback = function()
+            focused = true
+            if not self:live() or not self:holds() then
+                return
+            end
+            self:start()
+            self:trigger()
+        end,
+    })
+    vim.api.nvim_create_autocmd('FocusLost', {
+        group = group,
+        pattern = '*',
+        callback = function()
+            focused = false
+            self:stop()
+        end,
+    })
+
+    for _, event in ipairs(moved) do
+        vim.api.nvim_create_autocmd(event, {
+            group = group,
+            pattern = '*',
+            callback = self:watched(),
+        })
+    end
 end
 
 ---Stop following a buffer: close its timer and clear its autocommands.
@@ -154,110 +256,8 @@ function M.detach(buffer)
         return true
     end
 
-    states[buffer] = nil
-    stop(state)
-    if state.group then
-        pcall(vim.api.nvim_del_augroup_by_id, state.group)
-        state.group = nil
-    end
+    state:detach()
     return true
-end
-
----Keep the timer running exactly while the rule holds, and stop following a
----buffer that is gone.
----@param state prohub.hub.refresh.State
-local function update(state)
-    if not live(state) then
-        return M.detach(state.buffer)
-    end
-    if holds(state) then
-        start(state)
-    else
-        stop(state)
-    end
-end
-
----An autocommand that checks the rule once the editor is done with the change
----that fired it.
----@param state prohub.hub.refresh.State
----@return fun() callback
-local function watched(state)
-    return function()
-        vim.schedule(function()
-            update(state)
-        end)
-    end
-end
-
----Follow one buffer: the timer, the events that start and stop it, and the two
----events that render the hub again at once.
----@param state prohub.hub.refresh.State
-local function install(state)
-    local group = vim.api.nvim_create_augroup(
-        ('prohub_hub_refresh_%d'):format(state.buffer),
-        { clear = true }
-    )
-    state.group = group
-
-    -- A wiped buffer cannot be shown again, so it leaves nothing behind.
-    vim.api.nvim_create_autocmd('BufWipeout', {
-        group = group,
-        buffer = state.buffer,
-        once = true,
-        callback = function()
-            M.detach(state.buffer)
-        end,
-    })
-
-    -- Entering the buffer is the moment the user comes back to the hub.
-    vim.api.nvim_create_autocmd('BufEnter', {
-        group = group,
-        buffer = state.buffer,
-        callback = function()
-            if not live(state) or not holds(state) then
-                return
-            end
-            start(state)
-            trigger(state)
-        end,
-    })
-
-    -- A hidden buffer is shown in no window.
-    vim.api.nvim_create_autocmd('BufHidden', {
-        group = group,
-        buffer = state.buffer,
-        callback = watched(state),
-    })
-
-    -- Focus is what the timer cannot read from the editor.
-    vim.api.nvim_create_autocmd('FocusGained', {
-        group = group,
-        pattern = '*',
-        callback = function()
-            focused = true
-            if not live(state) or not holds(state) then
-                return
-            end
-            start(state)
-            trigger(state)
-        end,
-    })
-    vim.api.nvim_create_autocmd('FocusLost', {
-        group = group,
-        pattern = '*',
-        callback = function()
-            focused = false
-            stop(state)
-        end,
-    })
-
-    for _, event in ipairs(moved) do
-        vim.api.nvim_create_autocmd(event, {
-            group = group,
-            pattern = '*',
-            callback = watched(state),
-        })
-    end
 end
 
 ---Follow a hub buffer: render it again on a timer while it is shown in a
@@ -290,14 +290,14 @@ function M.attach(buffer, refresh)
 
     M.detach(buffer)
 
-    local state = {
+    local state = setmetatable({
         buffer = buffer,
         refresh = refresh,
         interval = options.refresh_interval,
-    }
+    }, State)
     states[buffer] = state
 
-    local installed, install_err = pcall(install, state)
+    local installed, install_err = pcall(state.install, state)
     if not installed then
         states[buffer] = nil
         return nil,
@@ -306,8 +306,8 @@ function M.attach(buffer, refresh)
             )
     end
 
-    if holds(state) then
-        start(state)
+    if state:holds() then
+        state:start()
     end
     return true
 end
