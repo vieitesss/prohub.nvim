@@ -217,13 +217,25 @@ local stored = {}
 ---Overlay one layer of options on another. Omitted fields keep the value they
 ---already have, and `keymaps` is merged key by key, so overriding one keymap
 ---keeps the others.
+---
+---A `keymaps` layer that is not a table is reported before the merge: merging
+---key by key needs a table on both sides, and a merge that threw would make
+---reading the options throw as well.
 ---@param base table
 ---@param layer table
----@return table
+---@return table? merged
+---@return string? err
 local function merge(base, layer)
+    if layer.keymaps ~= nil and type(layer.keymaps) ~= 'table' then
+        return nil,
+            ('prohub: keymaps: expected table, got %s'):format(
+                type(layer.keymaps)
+            )
+    end
+
     local result = vim.deepcopy(base)
     for name, value in pairs(layer) do
-        if name == 'keymaps' and type(value) == 'table' then
+        if name == 'keymaps' then
             result.keymaps =
                 vim.tbl_extend('force', result.keymaps or {}, value)
         else
@@ -250,21 +262,38 @@ local function read_global()
     return global
 end
 
----The options in use: the defaults, over `vim.g.prohub`, over `setup`.
+---The options in use: the defaults, over `vim.g.prohub`, over the last
+---`setup` call and over the layer of the `setup` call that is being checked.
+---@param layer? table The options of the `setup` call being checked.
 ---@return prohub.Config? options
 ---@return string? err
-function M.get()
+local function merged(layer)
     local global, err = read_global()
     if not global then
         return nil, err
     end
 
-    local options = merge(merge(defaults, global), stored)
+    local options = defaults
+    for _, next_layer in ipairs({ global, stored, layer or {} }) do
+        local next_options, merge_err = merge(options, next_layer)
+        if not next_options then
+            return nil, merge_err
+        end
+        options = next_options
+    end
+
     local ok, check_err = check_options(options)
     if not ok then
         return nil, check_err
     end
     return options
+end
+
+---The options in use: the defaults, over `vim.g.prohub`, over `setup`.
+---@return prohub.Config? options
+---@return string? err
+function M.get()
+    return merged()
 end
 
 ---Change the options. Omitted fields keep their value. A value that is not
@@ -278,19 +307,17 @@ function M.setup(opts)
         return nil, err
     end
 
-    local global, gerr = read_global()
-    if not global then
-        return nil, gerr
-    end
-
     local layer = opts and vim.deepcopy(opts) or {}
-    local options = merge(merge(merge(defaults, global), stored), layer)
-    ok, err = check_options(options)
-    if not ok then
-        return nil, err
+    local valid, merged_err = merged(layer)
+    if not valid then
+        return nil, merged_err
     end
 
-    stored = merge(stored, layer)
+    local next_stored, stored_err = merge(stored, layer)
+    if not next_stored then
+        return nil, stored_err
+    end
+    stored = next_stored
     return true
 end
 

@@ -219,6 +219,42 @@ describe('prohub.config', function()
         assert.is_truthy(err:find('keymaps.review', 1, true))
     end)
 
+    it(
+        'reports a keymaps layer it cannot merge, instead of throwing',
+        function()
+            -- The setup layer holds keymaps, the global one holds a string, so the
+            -- two cannot be merged key by key.
+            assert.is_true(config.setup({ keymaps = { review = 'x' } }))
+            vim.g.prohub = { keymaps = 'bad' }
+
+            local options, err = config.get()
+
+            assert.is_nil(options)
+            assert.is_truthy(err:find('keymaps', 1, true))
+
+            local ok, setup_err = config.setup()
+
+            assert.is_nil(ok)
+            assert.is_truthy(setup_err:find('keymaps', 1, true))
+        end
+    )
+
+    it(
+        'reports a keymaps layer it cannot merge through prohub.setup',
+        function()
+            local prohub = require('prohub')
+
+            assert.is_true(prohub.setup({ keymaps = { review = 'x' } }))
+            vim.g.prohub = { keymaps = 'bad' }
+
+            local ok, err = prohub.setup()
+
+            assert.is_nil(ok)
+            assert.is_truthy(err:find('keymaps', 1, true))
+            assert.is_nil(require('prohub.config').get())
+        end
+    )
+
     it('returns an error when vim.g.prohub is not a table', function()
         vim.g.prohub = 'diff_viewer = minifugit'
 
