@@ -25,7 +25,7 @@ describe('prohub.refs', function()
     ---@return prohub.Refs? known
     ---@return string? err
     local function read(path)
-        return chain.run_sync(path, refs.flow(path))
+        return chain.run_sync(path, refs.flow)
     end
 
     describe('flow', function()

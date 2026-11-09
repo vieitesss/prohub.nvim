@@ -140,10 +140,9 @@ end
 ---@param options prohub.Config
 ---@return prohub.chain.Flow
 local function unpushed_flow(path, options)
-    local read = refs.flow(path)
     local resolve_base = base.flow(path, options)
     return function(run, done)
-        read(run, function(known, err)
+        refs.flow(run, function(known, err)
             if not known then
                 return done(nil, err)
             end
@@ -271,9 +270,8 @@ end
 ---@param path string Absolute path of the worktree.
 ---@return prohub.chain.Flow
 function M.counterpart_flow(path)
-    local read = refs.flow(path)
     return function(run, done)
-        read(run, function(known, err)
+        refs.flow(run, function(known, err)
             if not known then
                 return done(nil, err)
             end

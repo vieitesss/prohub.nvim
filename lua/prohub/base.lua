@@ -157,9 +157,8 @@ end
 ---@param options prohub.Config The options in use.
 ---@return prohub.chain.Flow
 function M.flow(path, options)
-    local read = refs.flow(path)
     return function(run, done)
-        read(run, function(known, err)
+        refs.flow(run, function(known, err)
             if not known then
                 return done(nil, err)
             end

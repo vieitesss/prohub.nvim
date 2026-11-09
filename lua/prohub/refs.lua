@@ -18,7 +18,7 @@
 ---
 ---    local refs = require('prohub.refs')
 ---
----    chain.run_sync(path, refs.flow(path))
+---    chain.run_sync(path, refs.flow)
 ---    local ref = refs.ref(known, 'main')
 ---@class prohub.refs
 local M = {}
@@ -109,18 +109,16 @@ local function parse(text)
     return known
 end
 
----The steps of a read: run the command and parse its output.
----@param path string Absolute path of the worktree.
----@return prohub.chain.Flow
-function M.flow(path)
-    return function(run, done)
-        run(command, function(out, err)
-            if not out then
-                return done(nil, err)
-            end
-            done(parse(out))
-        end)
-    end
+---The read of the refs of a worktree: run the command and parse its output.
+---The read is a flow, so a chain of any kind runs it.
+---@type prohub.chain.Flow
+function M.flow(run, done)
+    run(command, function(out, err)
+        if not out then
+            return done(nil, err)
+        end
+        done(parse(out))
+    end)
 end
 
 ---The ref of a branch: the ref of `origin` when it exists, because the remote
