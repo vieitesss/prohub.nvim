@@ -153,9 +153,7 @@ function M.resolve(spec)
         if type(open) ~= 'function' then
             return nil, 'prohub: the diff viewer has no open function'
         end
-        return function(ctx)
-            return open(ctx)
-        end
+        return open
     end
 
     return nil,
